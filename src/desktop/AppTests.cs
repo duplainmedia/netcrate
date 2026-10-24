@@ -1,0 +1,101 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
+using NetCrate;
+class AppTests {
+ static JavaScriptSerializer json=new JavaScriptSerializer();
+ static int count;
+ static void Assert(bool ok,string message){if(!ok)throw new Exception(message);count++;}
+ static void Put(string path,object value){Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllText(path,json.Serialize(value));}
+ static void Main(){string root=Path.Combine(Path.GetTempPath(),"NetCrateTest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);try{Run(root);Console.WriteLine("PASS: "+count+" job-model and notification assertions.");}finally{if(Path.GetFileName(root).StartsWith("NetCrateTest-")&&Path.GetDirectoryName(root)==Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar))Directory.Delete(root,true);}}
+ static void Run(string root){
+  Settings s=new Settings{BackupRecords=Path.Combine(root,"records"),RunsRoot=Path.Combine(root,"runs"),Outbox=Path.Combine(root,"outbox"),SourceState=Path.Combine(root,"source-state"),ReceiverState=Path.Combine(root,"receiver-state"),ActiveRoot=Path.Combine(root,"active"),OutputRoot=Path.Combine(root,"output")};
+  foreach(string p in new[]{s.BackupRecords,s.RunsRoot,s.Outbox,s.SourceState,s.ReceiverState,s.ActiveRoot,s.OutputRoot})Directory.CreateDirectory(p);
+  string project="2026-10-23_Example",source=new string('a',64),result=new string('b',64),requestId=new string('c',64),projectPath=Path.Combine(s.ActiveRoot,project);
+  Directory.CreateDirectory(projectPath);
+  Put(Path.Combine(s.BackupRecords,project+".backup-result.json"),new{Status="Verified",Source=projectPath,SnapshotId=source,VerifiedUtc="2026-10-24T12:00:00Z",VerifiedFileCount=2,VerifiedBytes=1000});
+  JobReader reader=new JobReader(s);Dashboard d=reader.Read();Assert(d.Jobs.Count==1&&d.Jobs[0].Phase=="Backup verified","Verified original backup was not displayed.");
+  s.ProgressState=Path.Combine(root,"progress-state");Directory.CreateDirectory(Path.Combine(s.ProgressState,"Jobs"));
+  Put(Path.Combine(s.Outbox,requestId,"request.json"),new{Version=1,Kind="request",SnapshotId=source,ProjectPath="/D/Video Projects/"+project,BackupExitCode=0,CompletedUtc="2026-10-24T13:00:00Z"});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Request queued","Unsent request was marked as office processing or completed.");
+  Put(Path.Combine(s.SourceState,"Sent",requestId+".json"),new{Kind="request",SnapshotId=new string('d',64),SentUtc="2026-10-24T13:01:00Z"});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Waiting for office results"&&d.Jobs[0].Progress<0,"Sent request invented encoding progress.");
+  string progressPath=Path.Combine(s.ProgressState,"Jobs",requestId+".json");
+  Dictionary<string,object> live=new Dictionary<string,object>{{"Version",1},{"Kind","office-media-progress"},{"SourceComputer","SOURCE-PC"},{"WorkerComputer","WORKER-PC"},{"RequestId",requestId},{"SourceSnapshotId",source},{"ProjectPath","/D/Video Projects/"+project},{"JobId","job"},{"AttemptId",new string('d',32)},{"Sequence",1},{"UpdatedUtc",DateTime.UtcNow.ToString("o")},{"Stage","GeneratingProxies"},{"TotalClips",4},{"CompletedClips",1},{"ProxyFilesCompleted",1},{"ContactSheetsCompleted",1},{"StageCompletedUnits",25},{"StageTotalUnits",100},{"StageUnit","source-seconds"},{"CurrentClip","Camera/two.mp4"},{"EtaSeconds",120},{"EtaScope","phase"},{"EtaBasis","Measured FFmpeg rate"},{"EtaSampleSeconds",40},{"Message","Encoding"}};
+  Put(progressPath,live);d=reader.Read();Assert(d.Jobs[0].Phase=="Generating proxies"&&d.Jobs[0].Progress==25&&d.Jobs[0].EtaSeconds.HasValue,"Real WORKER-PC progress and observed ETA were not displayed.");
+  Put(Path.Combine(s.ProgressState,"status.json"),new{State="RetryPending",CheckedUtc=DateTime.UtcNow.ToString("o")});d=reader.Read();Assert(d.Activity.Contains("progress")&&!d.ServiceAttention,"A progress reader failure was hidden or falsely failed the job.");Put(Path.Combine(s.ProgressState,"status.json"),new{State="Ready",CheckedUtc=DateTime.UtcNow.ToString("o")});
+  live["UpdatedUtc"]=DateTime.UtcNow.AddMinutes(-3).ToString("o");Put(progressPath,live);d=reader.Read();Assert(d.Jobs[0].Phase=="Office status delayed"&&!d.Jobs[0].EtaSeconds.HasValue&&!d.Jobs[0].Attention,"Stale WORKER-PC progress retained a false ETA or became a failure.");
+  live["UpdatedUtc"]=DateTime.UtcNow.ToString("o");live["EtaSampleSeconds"]=2;Put(progressPath,live);Assert(!reader.Read().Jobs[0].EtaSeconds.HasValue,"An ETA without enough observed throughput was displayed.");
+  live["EtaSampleSeconds"]=40;live["Stage"]="Complete";live["EtaSeconds"]=null;Put(progressPath,live);Assert(reader.Read().Jobs[0].Phase=="Waiting for download","Office publication was mistaken for source-verified delivery.");File.Delete(progressPath);
+  string dest=Path.Combine(projectPath,"Proxies","job");Directory.CreateDirectory(dest);
+  Put(Path.Combine(dest,"COMPLETE.json"),new{verified=true,snapshot_id=new string('e',64),project=project,proxy_files=2,contact_sheets=2});
+  Put(Path.Combine(s.ReceiverState,result+".json"),new{JobId="job",ResultSnapshot=result,Destination=dest,MediaFiles=4,VerifiedUtc="2026-10-24T14:00:00Z"});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Waiting for office results","An older source snapshot was mistaken for a new result.");
+  Put(Path.Combine(dest,"COMPLETE.json"),new{verified=true,snapshot_id=source,project=project,proxy_files=2,contact_sheets=2});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Proxies ready"&&d.Jobs[0].ProxyFiles==2&&d.Jobs[0].ResultFolder==dest,"Exact verified generated result was not displayed.");
+  string replacements=Path.Combine(s.BackupRecords,"proxy-replacement-requests.json"),replacementId=new string('9',64),replacementDest=Path.Combine(projectPath,"Proxies","job-half10-v2");
+  Put(replacements,new{Version=1,Projects=new[]{new{ProjectPath=projectPath,SourceSnapshotId=source,BaselineResultSnapshots=new[]{result},BaselineOfficeJobId="job",BaselineOfficeAttemptId=new string('d',32),RequestedUtc=DateTime.UtcNow.ToString("o"),TargetDescription="Half-resolution, 10-bit ProRes Proxy"}}});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Replacement requested"&&d.Jobs[0].Active&&d.Jobs[0].ResultFolder==dest,"Replacement request hid existing media or falsely showed replacement readiness.");
+  live["Stage"]="GeneratingProxies";live["JobId"]="job-half10-v2";live["AttemptId"]=new string('f',32);live["EtaSeconds"]=120;live["UpdatedUtc"]=DateTime.UtcNow.ToString("o");Put(progressPath,live);
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Generating replacement"&&d.Jobs[0].Progress==25&&d.Jobs[0].EtaSeconds.HasValue&&d.Jobs[0].ResultFolder==dest,"Old verified proxies masked replacement generation or its ETA.");
+  live["JobId"]="job";Put(progressPath,live);Assert(reader.Read().Jobs[0].Phase=="Generating replacement","A new attempt with the same job ID was mistaken for the old delivery.");
+  live["Stage"]="Complete";live["EtaSeconds"]=null;Put(progressPath,live);Assert(reader.Read().Jobs[0].Phase=="Awaiting replacement","Office publication falsely marked the replacement as source-verified.");
+  Directory.CreateDirectory(replacementDest);Put(Path.Combine(replacementDest,"COMPLETE.json"),new{verified=false,snapshot_id=source,project=project,proxy_files=2,contact_sheets=2});Put(Path.Combine(s.ReceiverState,replacementId+".json"),new{JobId="job-half10-v2",ResultSnapshot=replacementId,Destination=replacementDest,MediaFiles=4,VerifiedUtc=DateTime.UtcNow.ToString("o")});
+  Assert(reader.Read().Jobs[0].Phase=="Awaiting replacement","An unverified replacement was selected.");
+  Put(Path.Combine(replacementDest,"COMPLETE.json"),new{verified=true,snapshot_id=source,project=project,proxy_files=2,contact_sheets=2});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Proxies ready"&&d.Jobs[0].ResultFolder==replacementDest&&d.Jobs[0].ResultSnapshot==replacementId&&d.Jobs[0].Detail.Contains("New verified version"),"New exact-source verified replacement was not recognized.");
+  Put(Path.Combine(s.ReceiverState,result+".json"),new{JobId="job",ResultSnapshot=result,Destination=dest,MediaFiles=4,VerifiedUtc=DateTime.UtcNow.AddMinutes(1).ToString("o")});Assert(reader.Read().Jobs[0].ResultFolder==replacementDest&&Directory.Exists(dest),"Reverification of old proxies displaced the newer version or removed existing files.");
+  Put(replacements,new{Version=1,Projects=new[]{new{ProjectPath=projectPath,SourceSnapshotId=source,BaselineResultSnapshots=new[]{result},BaselineOfficeJobId="job",BaselineOfficeAttemptId=new string('d',32),RequestedUtc=DateTime.UtcNow.ToString("o"),TargetDescription="Half-resolution, 10-bit ProRes Proxy",ExpectedJobId="job-half10-v2",ExpectedRecipe="half-prores-v2",ExpectedScaleDivisor=2,ExpectedBitDepth=10,ExpectedPixelFormat="yuv422p10le",ExpectedClipCount=2}}});
+  d=reader.Read();Assert(d.Jobs[0].Phase!="Proxies ready"&&d.Jobs[0].ResultFolder==dest,"A replacement without declared half-resolution recipe metadata was marked ready.");
+  foreach(string field in new[]{"proxy_recipe","proxy_scale_divisor","proxy_bit_depth","proxy_pixel_format"}){
+   var metadata=new Dictionary<string,object>{{"verified",true},{"snapshot_id",source},{"project",project},{"proxy_files",2},{"contact_sheets",2},{"proxy_recipe","half-prores-v2"},{"proxy_scale_divisor",2},{"proxy_bit_depth",10},{"proxy_pixel_format","yuv422p10le"}};metadata[field]=field=="proxy_recipe"?(object)"quarter-prores-v1":field=="proxy_pixel_format"?(object)"yuv420p":(object)4;Put(Path.Combine(replacementDest,"COMPLETE.json"),metadata);
+   d=reader.Read();Assert(d.Jobs[0].Phase!="Proxies ready"&&d.Jobs[0].ResultFolder==dest,"Incorrect "+field+" satisfied the replacement request.");
+  }
+  Put(Path.Combine(replacementDest,"COMPLETE.json"),new{verified=true,snapshot_id=source,project=project,proxy_files=2,contact_sheets=2,proxy_recipe="half-prores-v2",proxy_scale_divisor=2,proxy_bit_depth=10,proxy_pixel_format="yuv422p10le"});
+  Put(Path.Combine(s.ReceiverState,replacementId+".json"),new{JobId="unrelated-job",ResultSnapshot=replacementId,Destination=replacementDest,MediaFiles=4,VerifiedUtc=DateTime.UtcNow.ToString("o")});
+  live["JobId"]="job";live["AttemptId"]=new string('f',32);live["Stage"]="GeneratingProxies";Put(progressPath,live);
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Replacement requested"&&d.Jobs[0].ResultFolder==dest&&!d.Jobs[0].OfficeProgress,"A different job's receipt or the old job's new attempt satisfied the exact replacement.");
+  live["JobId"]="job-half10-v2";Put(progressPath,live);Assert(reader.Read().Jobs[0].Phase=="Generating replacement","The expected replacement job's new attempt was rejected.");
+  string otherRequest=new string('8',64),otherProgress=Path.Combine(s.ProgressState,"Jobs",otherRequest+".json");
+  Put(Path.Combine(s.Outbox,otherRequest,"request.json"),new{Version=1,Kind="request",SnapshotId=source,ProjectPath="/D/Video Projects/"+project,BackupExitCode=0,CompletedUtc="2026-10-24T13:00:00Z"});Put(Path.Combine(s.SourceState,"Sent",otherRequest+".json"),new{Kind="request",SentUtc="2026-10-24T13:01:00Z"});
+  live["JobId"]="job";Put(progressPath,live);live["RequestId"]=otherRequest;live["JobId"]="job-half10-v2";Put(otherProgress,live);d=reader.Read();Assert(d.Jobs[0].Phase=="Generating replacement"&&d.Jobs[0].Progress==25,"A retained old job status masked the expected replacement progress.");File.Delete(otherProgress);Directory.Delete(Path.Combine(s.Outbox,otherRequest),true);File.Delete(Path.Combine(s.SourceState,"Sent",otherRequest+".json"));live["RequestId"]=requestId;live["JobId"]="job-half10-v2";Put(progressPath,live);
+  Put(Path.Combine(s.ReceiverState,replacementId+".json"),new{JobId="job-half10-v2",ResultSnapshot=replacementId,Destination=replacementDest,MediaFiles=4,VerifiedUtc=DateTime.UtcNow.ToString("o")});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Proxies ready"&&d.Jobs[0].ResultFolder==replacementDest&&d.Jobs[0].Detail.Contains("half-prores-v2"),"Exact half-resolution receipt and recipe were not recognized or labelled.");
+  string halfCentral=Path.Combine(s.OutputRoot,"job-half10-v2");Directory.CreateDirectory(halfCentral);File.Copy(Path.Combine(replacementDest,"COMPLETE.json"),Path.Combine(halfCentral,"COMPLETE.json"));
+  Put(Path.Combine(halfCentral,"COMPLETE.json"),new{verified=true,snapshot_id=source,project="Historical display name",proxy_files=2,contact_sheets=2,proxy_recipe="half-prores-v2",proxy_scale_divisor=2,proxy_bit_depth=10,proxy_pixel_format="yuv422p10le"});
+  Put(Path.Combine(s.ReceiverState,replacementId+".json"),new{JobId="job-half10-v2",ResultSnapshot=replacementId,Destination=halfCentral,MediaFiles=4,VerifiedUtc=DateTime.UtcNow.ToString("o")});
+  Assert(reader.Read().Jobs[0].ResultFolder==halfCentral,"The exact expected source and job could not map its central delivery with a historical project alias.");
+  File.Delete(replacements);File.Delete(Path.Combine(s.ReceiverState,replacementId+".json"));Put(Path.Combine(s.ReceiverState,result+".json"),new{JobId="job",ResultSnapshot=result,Destination=dest,MediaFiles=4,VerifiedUtc="2026-10-24T14:00:00Z"});live["JobId"]="job";live["AttemptId"]=new string('d',32);
+  live["Stage"]="Failed";Put(progressPath,live);Assert(reader.Read().Jobs[0].Phase=="Proxies ready","An older office failure overrode an exact source-verified delivery.");File.Delete(progressPath);
+  NotificationMemory memory=new NotificationMemory();Assert(memory.Observe(d).Count==0,"First launch replayed old completion alerts.");
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Failed",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},ExitCode=3,StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ProcessId=999999});
+  d=reader.Read();Assert(d.Jobs[0].Attention&&d.Jobs[0].Phase=="Backup needs attention","Failed backup was hidden by an older success.");
+  Assert(memory.Observe(d).Count==1,"New failure did not alert exactly once.");Assert(memory.Observe(d).Count==0,"Unchanged failure repeatedly alerted.");
+  string saved=json.Serialize(memory);NotificationMemory restarted=json.Deserialize<NotificationMemory>(saved);Assert(restarted.Observe(d).Count==0,"Restart repeated a known failure notification.");
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Running",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ProcessId=999999});
+  d=reader.Read();Assert(d.Jobs[0].Phase=="Backup interrupted","A dead backup process stayed active forever.");
+  string log=Path.Combine(s.RunsRoot,"run.backup.jsonl");File.WriteAllText(log,"{\"message_type\":\"status\",\"percent_done\":0.25,\"files_done\":5,\"bytes_done\":250}\n");
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Running",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},LogPath=log,StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ProcessId=System.Diagnostics.Process.GetCurrentProcess().Id,ProcessStartedUtc=System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().ToString("o")});
+  d=reader.Read();Assert(d.Jobs[0].Active&&d.Jobs[0].Phase=="Backing up footage"&&d.Jobs[0].Progress==25,"Live Restic progress or process identity was ignored.");
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Interrupted",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ProcessId=999999});
+  Assert(reader.Read().Jobs[0].Phase=="Backup interrupted","An explicit interrupted native run was mislabeled.");
+  string newer=new string('f',64);File.WriteAllText(log,"{\"message_type\":\"summary\",\"snapshot_id\":\""+newer+"\",\"total_files_processed\":2,\"total_bytes_processed\":1000}\n");
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Completed",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},LogPath=log,StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ExitCode=0});
+  Put(Path.Combine(s.RunsRoot,"run.media-success.json"),new{State="RetryPending",SnapshotId=newer,BackupExitCode=0,ProjectPaths=new string[0],CreatedUtc="2026-10-24T15:01:00Z"});
+  d=reader.Read();Assert(d.Jobs[0].Attention&&d.Jobs[0].Phase=="Request needs attention"&&d.Jobs[0].BackupCompleted,"Empty-project media-hook failure stayed preparing forever.");
+  File.Delete(Path.Combine(s.RunsRoot,"run.media-success.json"));
+  Put(Path.Combine(s.RunsRoot,"run.backup-status.json"),new{Version=1,State="Completed",MediaHookState="Failed",RunId="run",ProjectPaths=new[]{"/D/Video Projects/"+project},LogPath=log,StartedUtc="2026-10-24T15:00:00Z",UpdatedUtc="2026-10-24T15:01:00Z",ExitCode=0});Assert(reader.Read().Jobs[0].Phase=="Request needs attention","A hook error before success-event creation was hidden.");
+  File.Delete(Path.Combine(s.RunsRoot,"run.backup-status.json"));Put(Path.Combine(s.SourceState,"status.json"),new{State="Ready",Errors=0,CheckedUtc=DateTime.UtcNow.ToString("o")});Put(Path.Combine(s.SourceState,"retry-old.json"),new{State="RetryPending",Message="Old resolved error"});
+  Assert(!reader.Read().ServiceAttention,"A stale retry record generated a live service warning.");
+  Put(Path.Combine(s.SourceState,"status.json"),new{State="RetryPending",Errors=1,Message="Office connection unavailable"});Assert(reader.Read().ServiceAttention,"Current sender error was not visible.");
+  File.WriteAllText(Path.Combine(s.RunsRoot,"partial.media-success.json"),"{unfinished");Assert(reader.Read().Jobs.Count==1,"A partial status file removed existing jobs or crashed the reader.");
+  string central=Path.Combine(s.OutputRoot,"central-job");Directory.CreateDirectory(central);Assert(SafeFolders.CanOpen(central,s),"A supported central result could not be opened.");
+  Put(Path.Combine(central,"COMPLETE.json"),new{verified=true,snapshot_id=source,project="Another project",proxy_files=2,contact_sheets=2});Put(Path.Combine(s.ReceiverState,result+".json"),new{JobId="job",ResultSnapshot=result,Destination=central,MediaFiles=4,VerifiedUtc="2026-10-24T14:00:00Z"});
+  Assert(reader.Read().Jobs[0].Phase!="Proxies ready","Another project's central result was attributed to the only tracked project.");
+  Put(Path.Combine(s.BackupRecords,"office-backup-queue-control.json"),new{ExcludedProjects=new[]{project}});Assert(reader.Read().Jobs.Count==0,"An excluded project appeared in the job monitor.");
+  Assert(!SafeFolders.IsUnder(Path.Combine(s.ActiveRoot,"..","escape"),s.ActiveRoot),"Path traversal was accepted for folder actions.");
+  NotificationMemory pending=new NotificationMemory();pending.Observe(new Dashboard());Dashboard finished=new Dashboard();finished.Jobs.Add(new Job{Id="one",Project="One",BackupCompleted=true,SnapshotId=source});finished.Jobs.Add(new Job{Id="two",Project="Two",BackupCompleted=true,SnapshotId=result});pending.Observe(finished);
+  Assert(pending.Pending.Count==2,"Completion notices were not retained until delivery.");pending.MarkDelivered(pending.Pending[0].Key);NotificationMemory resumed=json.Deserialize<NotificationMemory>(json.Serialize(pending));Assert(resumed.Pending.Count==1&&resumed.Observe(finished).Count==0,"Restart lost or duplicated a queued notification.");resumed.SetEnabled(false);Assert(resumed.Pending.Count==0&&resumed.Observe(finished).Count==0,"Pausing notifications did not suppress queued alerts.");
+ }
+}

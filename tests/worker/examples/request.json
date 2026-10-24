@@ -1,0 +1,10 @@
+{
+  "Version": 1,
+  "Kind": "request",
+  "SourceComputer": "SOURCE-PC",
+  "Repository": "rest:https://backup.example:8000/sample-user/source-pc/",
+  "BackupExitCode": 0,
+  "SnapshotId": "4ae0c4cd9251aeb7c4f2daa66bcf80a57d413a632ff0abdd77b0db6a67674b43",
+  "ProjectPath": "/D/Projects/sample-project",
+  "CompletedUtc": "2025-01-15T12:00:00Z"
+}

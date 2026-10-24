@@ -1,0 +1,13 @@
+{
+  "project": "sample-project",
+  "snapshot_id": "4ae0c4cd9251aeb7c4f2daa66bcf80a57d413a632ff0abdd77b0db6a67674b43",
+  "proxy_recipe": "half-prores-v2",
+  "proxy_scale_divisor": 2,
+  "proxy_bit_depth": 10,
+  "proxy_pixel_format": "yuv422p10le",
+  "clips": 1,
+  "proxy_files": 1,
+  "contact_sheets": 1,
+  "verified": true,
+  "elapsed_seconds": 90
+}
