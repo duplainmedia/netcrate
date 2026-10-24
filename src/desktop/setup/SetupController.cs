@@ -14,6 +14,7 @@ namespace NetCrate.Setup
         public SetupState State { get; private set; }
         public SetupResult LastResult { get; private set; }
         public bool Busy { get; private set; }
+        public bool IsInstalling { get; private set; }
         public string ProgressMessage { get; private set; }
         public event EventHandler Changed;
 
@@ -122,10 +123,14 @@ namespace NetCrate.Setup
             Notify(true);
         }
 
-        public Task InspectAsync(CancellationToken token)
+        public async Task InspectAsync(CancellationToken token)
         {
             RequireIdle();
-            return RunAsync(() => service.InspectAsync(State.Copy(), token), token);
+            bool wasPrepared = State.Prepared;
+            State.InvalidateChecks();
+            await RunAsync(() => service.InspectAsync(State.Copy(), token), token);
+            State.Prepared = wasPrepared && LastResult.Succeeded;
+            Notify(true);
         }
 
         public async Task PrepareAsync(CancellationToken token)
@@ -133,9 +138,18 @@ namespace NetCrate.Setup
             RequireIdle();
             if (State.Step != SetupStep.Prepare) throw new InvalidOperationException("Return to Prepare this computer first.");
             State.InvalidateChecks();
-            await RunAsync(() => service.PrepareAsync(State.Copy(), Progress(), token), token);
-            State.Prepared = LastResult.Succeeded;
-            Notify(true);
+            IsInstalling = true;
+            try
+            {
+                await RunAsync(() => service.PrepareAsync(State.Copy(), Progress(), token), token);
+                State.Prepared = LastResult.Succeeded;
+                Notify(true);
+            }
+            finally
+            {
+                IsInstalling = false;
+                Notify(false);
+            }
         }
 
         public async Task SaveRecoveryAsync(string path, CancellationToken token)

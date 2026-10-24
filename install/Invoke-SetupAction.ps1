@@ -15,6 +15,10 @@ try {
         $software = @(Get-NetCrateSoftware -Role $inputState.Role)
         $missing = @($software | Where-Object { -not $_.Available }).Count
         $result = [pscustomobject]@{ Succeeded = $missing -eq 0; Code = $(if ($missing) { 'software-missing' } else { 'ok' }); Message = $(if ($missing) { 'Choose Prepare this computer to install the available required software.' } else { 'Required software is available.' }); Software = $software }
+        if (@($software | Where-Object Issue -EQ 'probe-timeout').Count) {
+            $result.Code = 'probe-timeout'
+            $result.Message = 'A software check took too long. Close other installers, then choose Try again.'
+        }
     } else {
         $result = Invoke-NetCratePreparation -Role $inputState.Role -StateRoot $stateRoot -Confirm:$false
     }

@@ -8,9 +8,9 @@ $framework = Split-Path $compiler
 $wpf = Join-Path $framework 'WPF'
 
 function Build-Test {
-    param([string]$Name, [string[]]$Sources, [string[]]$Arguments = @())
+    param([string]$Name, [string[]]$Sources, [string[]]$Arguments = @(), [string[]]$References = @())
     $exe = Join-Path $output ($Name + '.exe')
-    & $compiler /nologo /codepage:65001 /target:exe /r:System.Web.Extensions.dll "/out:$exe" @Sources
+    & $compiler /nologo /codepage:65001 /target:exe /r:System.Web.Extensions.dll "/out:$exe" @References @Sources
     if ($LASTEXITCODE -ne 0) { throw "$Name compilation failed." }
     & $exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Name failed." }
@@ -23,8 +23,10 @@ $settings = Join-Path $PSScriptRoot 'Settings.cs'
 $models = @($settings, $store, $state) + @('AppModel.cs', 'ProgressModel.cs', 'VersionModel.cs' | ForEach-Object { Join-Path $PSScriptRoot $_ })
 Build-Test 'AppTests' ($models + (Join-Path $PSScriptRoot 'AppTests.cs'))
 Build-Test 'SetupTests' @($state, $service, (Join-Path $PSScriptRoot 'setup\SetupController.cs'), (Join-Path $repo 'tests\desktop\SetupTests.cs'))
-Build-Test 'SetupStorageTests' @($state, $store, $service, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $repo 'tests\desktop\SetupStorageTests.cs')) @($TestRoot)
+$inspection = Join-Path $PSScriptRoot 'setup\InspectionProcess.cs'
+Build-Test 'SetupStorageTests' @($state, $store, $service, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $repo 'tests\desktop\SetupStorageTests.cs')) @($TestRoot, (Join-Path $repo 'install'))
 Build-Test 'SettingsTests' @($settings, $state, $store, (Join-Path $repo 'tests\desktop\SettingsTests.cs')) @($TestRoot)
+Build-Test 'InspectionTests' @($inspection, (Join-Path $repo 'tests\desktop\InspectionTests.cs'))
 
 & (Join-Path $PSScriptRoot 'Build-BrandAssets.ps1')
 $references = @(
@@ -32,10 +34,14 @@ $references = @(
     ('/r:' + (Join-Path $wpf 'PresentationFramework.dll')),
     ('/r:' + (Join-Path $wpf 'PresentationCore.dll')),
     ('/r:' + (Join-Path $wpf 'WindowsBase.dll')),
+    ('/r:' + (Join-Path $wpf 'UIAutomationProvider.dll')),
+    ('/r:' + (Join-Path $wpf 'UIAutomationTypes.dll')),
     ('/r:' + (Join-Path $framework 'System.Xaml.dll'))
 )
 $sources = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Where-Object Name -ne 'AppTests.cs' | Select-Object -ExpandProperty FullName)
 $sources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filter '*.cs' -File | Select-Object -ExpandProperty FullName)
+$viewSources = @((Join-Path $PSScriptRoot 'Theme.cs')) + @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filter '*.cs' -File | Select-Object -ExpandProperty FullName)
+Build-Test 'SetupViewTests' ($viewSources + (Join-Path $repo 'tests\desktop\SetupViewTests.cs')) @() $references
 $app = Join-Path $output 'NetCrate.exe'
 & $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$PSScriptRoot\App.manifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'Windows app compilation failed.' }

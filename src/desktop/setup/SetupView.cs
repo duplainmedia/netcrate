@@ -21,6 +21,9 @@ namespace NetCrate.Setup
         private readonly Grid shell = new Grid();
         private readonly Dictionary<string, Control> controls = new Dictionary<string, Control>();
         private bool checkingSoftware;
+        private CancellationTokenSource checkCancellation;
+        private bool closeAfterCheck;
+        private CancellationToken CheckToken { get { return checkCancellation == null ? CancellationToken.None : checkCancellation.Token; } }
 
         public SetupView(SetupController controller)
         {
@@ -35,12 +38,21 @@ namespace NetCrate.Setup
             FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Content = shell;
+            shell.Background = Theme.Brush(Theme.Background);
             InstallStyles();
             controller.Changed += OnChanged;
             Closed += delegate { controller.Changed -= OnChanged; };
             Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
             {
-                if (controller.Busy) args.Cancel = true;
+                if (controller.Busy)
+                {
+                    args.Cancel = true;
+                    if (!controller.IsInstalling && checkCancellation != null)
+                    {
+                        closeAfterCheck = true;
+                        checkCancellation.Cancel();
+                    }
+                }
             };
             SourceInitialized += delegate
             {
@@ -62,6 +74,7 @@ namespace NetCrate.Setup
 
         private void OnChanged(object sender, EventArgs args)
         {
+            if (closeAfterCheck && !controller.Busy) { Dispatcher.BeginInvoke(new Action(Close)); return; }
             if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(new Action(Render)); return; }
             Render();
         }
@@ -83,6 +96,7 @@ namespace NetCrate.Setup
                 "<Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.45'/></Trigger>" +
                 "</ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>";
             Resources.Add(typeof(Button), (Style)XamlReader.Parse(style));
+            Resources.Add(typeof(RadioButton), (Style)XamlReader.Parse(style.Replace("TargetType='Button'", "TargetType='RadioButton'")));
             Resources[SystemColors.HighlightBrushKey] = Theme.Brush(Theme.Primary);
         }
 
@@ -202,9 +216,20 @@ namespace NetCrate.Setup
             FlowDiagram(panel);
         }
 
-        private Button RoleCard(ComputerRole role, string title, string description, string glyph)
+        private RadioButton RoleCard(ComputerRole role, string title, string description, string glyph)
         {
-            Button card = Button(title, () => controller.ChooseComputer(role), false);
+            RadioButton card = new RadioButton { GroupName = "ComputerRole", IsChecked = controller.State.Role == role,
+                IsEnabled = !controller.Busy };
+            AutomationProperties.SetName(card, title);
+            AutomationProperties.SetHelpText(card, description);
+            controls[title] = card;
+            card.Checked += delegate
+            {
+                if (controller.State.Role == role) return;
+                try { controller.ChooseComputer(role); }
+                catch (IOException) { ShowSaveError(); }
+                catch (UnauthorizedAccessException) { ShowSaveError(); }
+            };
             card.HorizontalContentAlignment = HorizontalAlignment.Stretch;
             card.Padding = new Thickness(20);
             card.Margin = new Thickness(0, 0, 0, 13);
@@ -289,7 +314,7 @@ namespace NetCrate.Setup
                 picker.ShowNewFolderButton = true;
                 if (!String.IsNullOrEmpty(controller.State.Folder)) picker.SelectedPath = controller.State.Folder;
                 if (picker.ShowDialog(new WindowOwner(new System.Windows.Interop.WindowInteropHelper(this).Handle)) == Forms.DialogResult.OK)
-                    await RunSafeAsync(() => controller.ChooseFolderAsync(picker.SelectedPath, CancellationToken.None));
+                    await RunSafeAsync(() => controller.ChooseFolderAsync(picker.SelectedPath, CheckToken));
             }
         }
 
@@ -305,8 +330,10 @@ namespace NetCrate.Setup
                 words.Children.Add(Text(check.Purpose, 12, Theme.Muted));
                 panel.Children.Add(row);
             }
-            Button prepare = Button(controller.State.Prepared ? "Check again" : "_Prepare this computer",
-                async () => await RunSafeAsync(() => controller.PrepareAsync(CancellationToken.None)), true);
+            bool retryCheck = controller.LastResult.Code == "probe-timeout" || controller.LastResult.Code == "cancelled" ||
+                controller.LastResult.Code == "operation-failed" || controller.LastResult.Code == "installer-missing";
+            Button prepare = Button(retryCheck ? "Try again" : controller.State.Prepared ? "Check again" : "_Prepare this computer",
+                async () => await RunSafeAsync(() => retryCheck ? controller.InspectAsync(CheckToken) : controller.PrepareAsync(CheckToken)), true);
             prepare.HorizontalAlignment = HorizontalAlignment.Left;
             prepare.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(prepare);
@@ -331,7 +358,7 @@ namespace NetCrate.Setup
         {
             if (checkingSoftware) return;
             checkingSoftware = true;
-            try { await RunSafeAsync(() => controller.InspectAsync(CancellationToken.None)); }
+            try { await RunSafeAsync(() => controller.InspectAsync(CheckToken)); }
             finally { checkingSoftware = false; }
         }
 
@@ -339,7 +366,7 @@ namespace NetCrate.Setup
         {
             SaveFileDialog picker = new SaveFileDialog { Title = "Save recovery details", FileName = "NetCrate recovery", DefaultExt = ".netcrate", Filter = "NetCrate recovery|*.netcrate" };
             if (picker.ShowDialog(this) == true)
-                await RunSafeAsync(() => controller.SaveRecoveryAsync(picker.FileName, CancellationToken.None));
+                await RunSafeAsync(() => controller.SaveRecoveryAsync(picker.FileName, CheckToken));
         }
 
         private void ConnectScreen(StackPanel panel)
@@ -350,7 +377,7 @@ namespace NetCrate.Setup
             guide.Margin = new Thickness(0, 20, 0, 10);
             panel.Children.Add(guide);
             panel.Children.Add(Text("Computer pairing is still being built. This development version can check software, but cannot connect a backup repository yet.", 14, Theme.Warning));
-            Button check = Button("Check connection", async () => await RunSafeAsync(() => controller.CheckConnectionAsync(CancellationToken.None)), true);
+            Button check = Button("Check connection", async () => await RunSafeAsync(() => controller.CheckConnectionAsync(CheckToken)), true);
             check.HorizontalAlignment = HorizontalAlignment.Left;
             check.Margin = new Thickness(0, 20, 0, 0);
             panel.Children.Add(check);
@@ -361,7 +388,7 @@ namespace NetCrate.Setup
             Heading(panel, "Check the round trip", controller.State.Role == ComputerRole.EditingComputer
                 ? "A short generated sample will travel to the Backup Server. Its returned proxy must pass local verification."
                 : "The Editing Computer starts the sample check. Keep this computer on while it runs.");
-            panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CancellationToken.None)), true));
+            panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CheckToken)), true));
         }
 
         private void CompleteScreen(StackPanel panel)
@@ -385,6 +412,14 @@ namespace NetCrate.Setup
             back.HorizontalAlignment = HorizontalAlignment.Left;
             back.Visibility = controller.State.Step == SetupStep.Computer ? Visibility.Hidden : Visibility.Visible;
             footer.Children.Add(back);
+            if (controller.Busy && !controller.IsInstalling)
+            {
+                back.Visibility = Visibility.Collapsed;
+                Button cancel = Button("Cancel check", () => { if (checkCancellation != null) checkCancellation.Cancel(); }, false);
+                cancel.IsEnabled = true;
+                cancel.HorizontalAlignment = HorizontalAlignment.Left;
+                footer.Children.Add(cancel);
+            }
             Button next = Button("_Continue", async () => await RunSafeAsync(async () =>
             {
                 controller.Continue();
@@ -400,9 +435,17 @@ namespace NetCrate.Setup
 
         private async Task RunSafeAsync(Func<Task> action)
         {
+            CancellationTokenSource previous = checkCancellation;
+            CancellationTokenSource current = new CancellationTokenSource();
+            checkCancellation = current;
             try { await action(); }
             catch (IOException) { MessageBox.Show(this, "Your setup choices could not be saved. Check the free space and permissions in your Windows user folder, then reopen NetCrate.", "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
             catch (UnauthorizedAccessException) { MessageBox.Show(this, "NetCrate cannot save setup choices in your Windows user folder. Check the folder permissions, then reopen NetCrate.", "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
+            finally
+            {
+                if (checkCancellation == current) checkCancellation = previous;
+                current.Dispose();
+            }
         }
 
         private void ShowSaveError()

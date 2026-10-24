@@ -102,7 +102,13 @@ namespace NetCrate.Setup
                     Task<string> errors = process.StandardError.ReadToEndAsync();
                     // Finish the package manager operation before allowing another attempt.
                     // Cancelling an installer process can leave its child installer running.
-                    await Task.Run(() => process.WaitForExit());
+                    if (action == "Inspect")
+                    {
+                        bool finished = await InspectionProcess.WaitAsync(process, TimeSpan.FromSeconds(90), token);
+                        if (!finished)
+                            return SetupResult.ActionRequired("probe-timeout", "A software check took too long. Close other installers, then choose Try again.");
+                    }
+                    else await Task.Run(() => process.WaitForExit());
                     string text = await output;
                     await errors;
                     token.ThrowIfCancellationRequested();

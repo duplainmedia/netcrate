@@ -25,3 +25,16 @@ Assert (-not $failed.Succeeded -and $failed.Code -eq 'approval-denied') 'Decline
 $falseInstall = Invoke-NetCratePreparation -Role EditingComputer -StateRoot $TestRoot -Resolver $missing -Installer { param($Package) 0 }
 Assert (-not $falseInstall.Succeeded) 'Installer exit zero bypassed a failed software recheck.'
 Write-Output 'PASS: preparation planning, role dependencies, retry, approval denial and software recheck.'
+
+$splitRuntime = {
+    param($Name, $PythonPath)
+    if ($Name -eq 'Python') { return [pscustomobject]@{Path='C:\Python312\python.exe'; Version='Python 3.12.14'} }
+    if ($Name -eq 'Pillow' -and $PythonPath -eq 'C:\Python312\python.exe') { return $null }
+    return [pscustomobject]@{Path='C:\PythonOther\python.exe'; Version='12.3.0'}
+}
+$runtime = @(Get-NetCrateSoftware -Role BackupServer -Resolver $splitRuntime)
+Assert (($runtime | Where-Object Name -EQ 'Python').Available) 'Supported Python was not found.'
+Assert (-not ($runtime | Where-Object Name -EQ 'Pillow').Available) 'Pillow was accepted from a different interpreter.'
+$timedOut = Invoke-NetCratePreparation -Role EditingComputer -StateRoot $TestRoot -Resolver { param($Name) throw [TimeoutException]::new('Synthetic probe timeout.') } -Installer { throw 'No installer should start after a timed-out inspection.' }
+Assert (-not $timedOut.Succeeded -and $timedOut.Code -eq 'probe-timeout') 'A timed-out software check started installation or lost its retry result.'
+Write-Output 'PASS: interpreter-bound Pillow and timed-out software checks.'

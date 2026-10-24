@@ -134,6 +134,24 @@ class SetupTests
         catch (IOException) { saveFailed = true; }
         Assert(saveFailed && failedSave.State.Role == ComputerRole.None && !failedSave.CanContinue,
             "Failed persistence left an unsaved setup choice available for installation.");
+
+        FakeSetupService recheckService = new FakeSetupService();
+        SetupController recheck = new SetupController(recheckService, new MemorySetupStore());
+        recheck.ChooseComputer(ComputerRole.EditingComputer);
+        recheck.Continue();
+        await recheck.ChooseFolderAsync(@"F:\Video Projects", CancellationToken.None);
+        recheck.Continue();
+        await recheck.PrepareAsync(CancellationToken.None);
+        recheck.Continue();
+        recheck.Back();
+        recheckService.PrepareResult = SetupResult.ActionRequired("software-missing", "Required software is no longer available.");
+        await recheck.InspectAsync(CancellationToken.None);
+        Assert(!recheck.State.Prepared && !recheck.State.Connected && !recheck.CanContinue,
+            "Returning to preparation and failing its recheck retained the old preparation proof.");
+        recheckService.PrepareResult = SetupResult.Done("Software checked.");
+        await recheck.PrepareAsync(CancellationToken.None);
+        await recheck.InspectAsync(cancelled.Token);
+        Assert(!recheck.State.Prepared && !recheck.CanContinue, "Cancelling a recheck retained preparation proof.");
     }
 
     private class MemorySetupStore : ISetupStore

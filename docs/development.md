@@ -19,7 +19,7 @@ The output folder includes the setup engine scripts. Keep them alongside the exe
 - The first screen asks "Which computer is this?" and offers Editing Computer and Backup Server.
 - A native Windows picker selects the project parent folder or backup storage. Checks reject drive roots, unavailable folders, links, cloud-managed ancestors and unwritable storage.
 - Non-secret choices are saved atomically in the current Windows user's NetCrate setup folder. Restarting repeats software and peer checks. A corrupt state file is preserved and reported.
-- Software preparation detects role-specific dependencies, installs supported missing packages through pinned WinGet entries, and checks the result before proceeding. A failed or declined installation can be retried.
+- Software preparation detects role-specific dependencies, installs supported missing packages through pinned WinGet entries, and checks the result before proceeding. A failed or declined installation can be retried. Read-only software checks have deadlines and can be cancelled. An active package installation finishes before another attempt is allowed.
 - The Backup Server cannot advance without a separately saved and confirmed recovery copy. The editing role cannot finish without a successful sample round trip.
 
 The final two gates are tested controller contracts. Repository creation, key protection, recovery export, recipient-bound pairing and the actual sample pipeline are not connected to this build. Their service methods return an unavailable result and cannot mark setup complete. The inherited source and worker scripts also retain fictional deployment constants while shared configuration and protocol work continues. They are not an installation path.

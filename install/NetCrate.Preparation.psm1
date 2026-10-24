@@ -1,7 +1,34 @@
 Set-StrictMode -Version Latest
 
+function Invoke-NetCrateSoftwareProbe {
+    param([string]$Path, [string]$Arguments, [int]$TimeoutMilliseconds = 10000)
+
+    $start = [Diagnostics.ProcessStartInfo]::new($Path, $Arguments)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        $null = $process.Start()
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill()
+            throw [TimeoutException]::new('Software inspection timed out.')
+        }
+        if (-not $output.Wait(2000) -or -not $errors.Wait(2000)) {
+            throw [TimeoutException]::new('Software inspection output timed out.')
+        }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output.Result }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Resolve-NetCrateSoftware {
-    param([Parameter(Mandatory)][string]$Name)
+    param([Parameter(Mandatory)][string]$Name, [string]$PythonPath)
 
     $executables = @{
         PowerShell = 'pwsh.exe'
@@ -11,11 +38,11 @@ function Resolve-NetCrateSoftware {
         Pillow = 'python.exe'
     }
     $arguments = @{
-        PowerShell = @('-NoLogo', '-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()')
-        Restic = @('version')
-        FFmpeg = @('-version')
-        Python = @('--version')
-        Pillow = @('-I', '-c', 'import PIL; print(PIL.__version__)')
+        PowerShell = '-NoLogo -NoProfile -NonInteractive -Command "$PSVersionTable.PSVersion.ToString()"'
+        Restic = 'version'
+        FFmpeg = '-version'
+        Python = '--version'
+        Pillow = '-I -c "import PIL; print(PIL.__version__)"'
     }
     $paths = @($env:PATH -split ';')
     $paths += @([Environment]::GetEnvironmentVariable('PATH', 'User') -split ';')
@@ -25,14 +52,22 @@ function Resolve-NetCrateSoftware {
         (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312')
     )
-    foreach ($directory in @($paths | Select-Object -Unique)) {
-        if ([string]::IsNullOrWhiteSpace($directory) -or -not [IO.Path]::IsPathRooted($directory)) { continue }
-        $candidate = Join-Path $directory $executables[$Name]
+    $candidates = @()
+    if ($Name -eq 'Pillow') {
+        if ([string]::IsNullOrEmpty($PythonPath)) { return $null }
+        $candidates = @($PythonPath)
+    } else {
+        foreach ($directory in @($paths | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($directory) -or -not [IO.Path]::IsPathRooted($directory)) { continue }
+            $candidates += Join-Path $directory $executables[$Name]
+        }
+    }
+    foreach ($candidate in $candidates) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf) -or $candidate -like '*\WindowsApps\*') { continue }
         try {
-            $version = @(& $candidate @($arguments[$Name]) 2>$null)
-            if ($LASTEXITCODE -ne 0 -or $version.Count -eq 0) { continue }
-            $text = [string]$version[0]
+            $probe = Invoke-NetCrateSoftwareProbe -Path $candidate -Arguments $arguments[$Name]
+            if ($probe.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($probe.Output)) { continue }
+            $text = [string]($probe.Output -split '\r?\n')[0]
             $valid = switch ($Name) {
                 PowerShell { $text -match '^7\.' }
                 Restic { $text -match '^restic 0\.19\.' }
@@ -41,7 +76,8 @@ function Resolve-NetCrateSoftware {
                 Pillow { $text -match '^12\.3\.' }
             }
             if ($valid) { return [pscustomobject]@{ Path = $candidate; Version = $text.Trim() } }
-        } catch { continue }
+        } catch [TimeoutException] { throw }
+        catch { continue }
     }
     return $null
 }
@@ -63,8 +99,12 @@ function Get-NetCrateSoftware {
             @{ Name = 'Pillow'; Purpose = 'Creates contact sheets.'; Id = ''; Version = '12.3' }
         )
     }
+    $pythonPath = $null
     foreach ($package in $packages) {
-        $installed = & $Resolver $package.Name
+        $issue = ''
+        try { $installed = & $Resolver $package.Name $pythonPath }
+        catch [TimeoutException] { $installed = $null; $issue = 'probe-timeout' }
+        if ($package.Name -eq 'Python' -and $installed) { $pythonPath = $installed.Path }
         [pscustomobject]@{
             Name = $package.Name
             Purpose = $package.Purpose
@@ -73,6 +113,7 @@ function Get-NetCrateSoftware {
             Available = $null -ne $installed
             Path = $(if ($installed) { $installed.Path } else { $null })
             Version = $(if ($installed) { $installed.Version } else { $null })
+            Issue = $issue
         }
     }
 }
@@ -102,8 +143,16 @@ function Invoke-NetCratePreparation {
         return [pscustomobject]@{ Succeeded = $false; Code = 'plan'; Message = 'Software installation plan only.'; Software = $software }
     }
     foreach ($item in $software) {
+        if ($item.Issue -eq 'probe-timeout') {
+            return [pscustomobject]@{ Succeeded = $false; Code = 'probe-timeout'; Message = 'A software check took too long. Close other installers, then choose Try again.'; Software = $software }
+        }
         if ($item.Available) { continue }
-        if (& $Resolver $item.Name) { continue }
+        $current = @(Get-NetCrateSoftware -Role $Role -Resolver $Resolver)
+        $checkedItem = $current | Where-Object Name -EQ $item.Name
+        if ($checkedItem.Issue -eq 'probe-timeout') {
+            return [pscustomobject]@{ Succeeded = $false; Code = 'probe-timeout'; Message = 'A software check took too long. Close other installers, then choose Try again.'; Software = $current }
+        }
+        if ($checkedItem.Available) { continue }
         if (-not $PSCmdlet.ShouldProcess($item.Name, 'Install required software')) { continue }
         $code = & $Installer $item
         if ($code -notin @(0, -1978335189)) {
@@ -122,7 +171,8 @@ function Invoke-NetCratePreparation {
             }
             return [pscustomobject]@{ Succeeded = $false; Code = $reason; Message = $message; Software = @(Get-NetCrateSoftware -Role $Role -Resolver $Resolver) }
         }
-        if (-not (& $Resolver $item.Name)) {
+        $afterInstall = @(Get-NetCrateSoftware -Role $Role -Resolver $Resolver)
+        if (-not ($afterInstall | Where-Object Name -EQ $item.Name).Available) {
             return [pscustomobject]@{ Succeeded = $false; Code = 'software-unavailable'; Message = 'The installed software could not be checked. Restart NetCrate and choose Try again.'; Software = @(Get-NetCrateSoftware -Role $Role -Resolver $Resolver) }
         }
     }

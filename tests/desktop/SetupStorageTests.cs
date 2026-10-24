@@ -58,6 +58,15 @@ class SetupStorageTests
             Assert(!result.Succeeded, "An absent pairing engine passed connection verification.");
             result = service.SaveRecoveryAsync(state, Path.Combine(root, "recovery.txt"), CancellationToken.None).Result;
             Assert(!result.Succeeded && !File.Exists(Path.Combine(root, "recovery.txt")), "Incomplete keys produced a misleading recovery file.");
+            if (args.Length > 1)
+            {
+                string engineState = Path.Combine(root, "engine-state");
+                WindowsSetupService engine = new WindowsSetupService(args[1], engineState);
+                result = engine.InspectAsync(state, CancellationToken.None).Result;
+                Assert(result.Software.Count == 2, "The native PowerShell inspection did not return the editing software list.");
+                Assert(Directory.GetFiles(engineState).Length == 0, "Inspection retained its input file.");
+                Assert(!Directory.Exists(Path.Combine(engineState, "Preparation")), "Inspection wrote an installation checkpoint.");
+            }
             Console.WriteLine("PASS: " + assertions + " setup storage and native folder assertions.");
         }
         finally
