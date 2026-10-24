@@ -17,8 +17,10 @@ using Forms=System.Windows.Forms;
 
 namespace NetCrate {
  public partial class JobApplication:Application {
-  readonly Settings settings=Settings.Local();readonly JavaScriptSerializer json=new JavaScriptSerializer();
-  readonly string stateRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"OfficeBackup\Monitor");
+  readonly Settings settings;readonly JavaScriptSerializer json=new JavaScriptSerializer();
+  readonly string stateRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"NetCrate\Monitor");
+  public JobApplication():this(Settings.Local()){}
+  private JobApplication(Settings settings){this.settings=settings;}
   Window window;TextBlock headingStatus,activity,footer;Button notificationButton;Forms.NotifyIcon tray;
   NotificationMemory memory;JobReader reader;System.Threading.Timer poll,noticeTimer;int reading;bool quitting,dark;Dashboard latest;
   Queue<Notice> manualNotices=new Queue<Notice>();DateTime lastNotice=DateTime.MinValue;EventWaitHandle showEvent,testEvent,exitEvent;RegisteredWaitHandle showWait,testWait,exitWait;
@@ -29,14 +31,16 @@ namespace NetCrate {
   [STAThread]public static void Main(string[] args){
    try {
     try{SetProcessDpiAwarenessContext(new IntPtr(-4));}catch{}
+    if(args.Length>=2&&args[0]=="--render-setup"){SetupStartup.Render(args[1],args.Contains("--folders"),args.Contains("--compact"));return;}
     if(args.Length==2&&args[0]=="--dump"){File.WriteAllText(args[1],new JavaScriptSerializer().Serialize(new JobReader(Settings.Local()).Read()));return;}
-    if(args.Length==2&&args[0]=="--render"){JobApplication preview=new JobApplication();preview.ShutdownMode=ShutdownMode.OnExplicitShutdown;preview.BuildWindow();preview.Apply(new JobReader(preview.settings).Read());preview.window.Show();preview.window.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render,new Action(delegate{}));preview.window.UpdateLayout();RenderTargetBitmap bitmap=new RenderTargetBitmap((int)preview.window.ActualWidth,(int)preview.window.ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(preview.window);PngBitmapEncoder encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using(FileStream f=File.Create(args[1]))encoder.Save(f);preview.quitting=true;preview.window.Close();preview.Shutdown();return;}
+    if(args.Length==2&&args[0]=="--render"){JobApplication preview=new JobApplication(Settings.Preview(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])),"preview-data")));preview.ShutdownMode=ShutdownMode.OnExplicitShutdown;preview.BuildWindow();preview.Apply(new JobReader(preview.settings).Read());preview.window.Show();preview.window.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render,new Action(delegate{}));preview.window.UpdateLayout();RenderTargetBitmap bitmap=new RenderTargetBitmap((int)preview.window.ActualWidth,(int)preview.window.ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(preview.window);PngBitmapEncoder encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using(FileStream f=File.Create(args[1]))encoder.Save(f);preview.quitting=true;preview.window.Close();preview.Shutdown();return;}
     bool created;using(Mutex mutex=new Mutex(true,EventPrefix()+"-instance",out created)){
      if(!created){try{using(EventWaitHandle ev=EventWaitHandle.OpenExisting(EventPrefix()+(args.Contains("--exit")?"-exit":args.Contains("--test-notification")?"-test":"-show")))ev.Set();}catch{}return;}
      if(args.Contains("--exit")){mutex.ReleaseMutex();return;}
+     if(args.Contains("--setup")||!File.Exists(Settings.DefaultPath)){SetupStartup.Run();mutex.ReleaseMutex();return;}
      JobApplication app=new JobApplication();app.Start(args);app.Run();mutex.ReleaseMutex();
     }
-   } catch(Exception ex){try{string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"OfficeBackup\Monitor");Directory.CreateDirectory(root);File.WriteAllText(Path.Combine(root,"startup-error.json"),new JavaScriptSerializer().Serialize(new{State="NeedsAttention",Message=ex.GetType().Name+": "+ex.Message,UpdatedUtc=DateTime.UtcNow.ToString("o")}));}catch{}if(!args.Contains("--background"))MessageBox.Show("The job monitor could not start. Your backups continue independently.\n\n"+ex.Message,"NetCrate",MessageBoxButton.OK,MessageBoxImage.Warning);}
+   } catch(Exception ex){try{string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"NetCrate\Monitor");Directory.CreateDirectory(root);File.WriteAllText(Path.Combine(root,"startup-error.json"),new JavaScriptSerializer().Serialize(new{State="NeedsAttention",Message=ex.GetType().Name+": "+ex.Message,UpdatedUtc=DateTime.UtcNow.ToString("o")}));}catch{}if(!args.Contains("--background"))MessageBox.Show("NetCrate could not start. Your existing backup files have not been changed.\n\n"+ex.Message,"NetCrate",MessageBoxButton.OK,MessageBoxImage.Warning);}
   }
   void Start(string[] args){
    ShutdownMode=ShutdownMode.OnExplicitShutdown;Directory.CreateDirectory(stateRoot);reader=new JobReader(settings);
@@ -46,7 +50,7 @@ namespace NetCrate {
    showEvent=new EventWaitHandle(false,EventResetMode.AutoReset,EventPrefix()+"-show");testEvent=new EventWaitHandle(false,EventResetMode.AutoReset,EventPrefix()+"-test");exitEvent=new EventWaitHandle(false,EventResetMode.AutoReset,EventPrefix()+"-exit");
    showWait=ThreadPool.RegisterWaitForSingleObject(showEvent,delegate{if(!quitting)Dispatcher.BeginInvoke(new Action(OpenWindow));},null,Timeout.Infinite,false);testWait=ThreadPool.RegisterWaitForSingleObject(testEvent,delegate{if(!quitting)Dispatcher.BeginInvoke(new Action(TestNotification));},null,Timeout.Infinite,false);exitWait=ThreadPool.RegisterWaitForSingleObject(exitEvent,delegate{if(!quitting)Dispatcher.BeginInvoke(new Action(ExitApp));},null,Timeout.Infinite,false);
    poll=new System.Threading.Timer(delegate{Refresh();},null,0,5000);noticeTimer=new System.Threading.Timer(delegate{if(!quitting)Dispatcher.BeginInvoke(new Action(NextNotice));},null,1000,1000);
-   if(args.Contains("--show"))OpenWindow();if(args.Contains("--test-notification"))TestNotification();
+   if(!args.Contains("--background"))OpenWindow();if(args.Contains("--test-notification"))TestNotification();
   }
   Brush Brush(string color){return new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));}
   TextBlock Text(string text,double size,string color){return new TextBlock{Text=text,FontSize=size,Foreground=Brush(color),TextWrapping=TextWrapping.Wrap};}

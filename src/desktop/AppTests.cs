@@ -10,7 +10,7 @@ class AppTests {
  static void Put(string path,object value){Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllText(path,json.Serialize(value));}
  static void Main(){string root=Path.Combine(Path.GetTempPath(),"NetCrateTest-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);try{Run(root);Console.WriteLine("PASS: "+count+" job-model and notification assertions.");}finally{if(Path.GetFileName(root).StartsWith("NetCrateTest-")&&Path.GetDirectoryName(root)==Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar))Directory.Delete(root,true);}}
  static void Run(string root){
-  Settings s=new Settings{BackupRecords=Path.Combine(root,"records"),RunsRoot=Path.Combine(root,"runs"),Outbox=Path.Combine(root,"outbox"),SourceState=Path.Combine(root,"source-state"),ReceiverState=Path.Combine(root,"receiver-state"),ActiveRoot=Path.Combine(root,"active"),OutputRoot=Path.Combine(root,"output")};
+  Settings s=new Settings{SnapshotRoot="/D/Video Projects",SourceComputer="SOURCE-PC",WorkerComputer="WORKER-PC",BackupRecords=Path.Combine(root,"records"),RunsRoot=Path.Combine(root,"runs"),Outbox=Path.Combine(root,"outbox"),SourceState=Path.Combine(root,"source-state"),ReceiverState=Path.Combine(root,"receiver-state"),ActiveRoot=Path.Combine(root,"active"),OutputRoot=Path.Combine(root,"output")};
   foreach(string p in new[]{s.BackupRecords,s.RunsRoot,s.Outbox,s.SourceState,s.ReceiverState,s.ActiveRoot,s.OutputRoot})Directory.CreateDirectory(p);
   string project="2026-10-23_Example",source=new string('a',64),result=new string('b',64),requestId=new string('c',64),projectPath=Path.Combine(s.ActiveRoot,project);
   Directory.CreateDirectory(projectPath);

@@ -8,11 +8,6 @@ using System.Collections.Generic;
 using System.Web.Script.Serialization;
 
 namespace NetCrate {
- public class Settings {
-  public string BackupRecords{get;set;} public string RunsRoot{get;set;} public string Outbox{get;set;}
-  public string SourceState{get;set;} public string ReceiverState{get;set;} public string ActiveRoot{get;set;} public string OutputRoot{get;set;} public string ProgressState{get;set;}
-  public static Settings Local(){string user=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);return new Settings{BackupRecords=Path.Combine(user,@"OneDrive\Documents\Sample Studio\backup-records"),RunsRoot=Path.Combine(user,@"AppData\Local\OfficeBackup\Runs"),Outbox=@"C:\ProgramData\OfficeMediaSource\Outbox",SourceState=@"C:\ProgramData\OfficeMediaSource\State",ReceiverState=@"C:\ProgramData\OfficeMediaClient\State",ProgressState=@"C:\ProgramData\OfficeMediaProgress\State",ActiveRoot=@"D:\Video Projects",OutputRoot=@"D:\OfficeMediaResults"};}
- }
  public class Job {
   public string Id{get;set;} public string Project{get;set;} public string ProjectPath{get;set;} public string SnapshotId{get;set;}
   public string Phase{get;set;} public string Detail{get;set;} public string ResultFolder{get;set;} public string ResultSnapshot{get;set;} public string Revision{get;set;}
@@ -46,7 +41,7 @@ namespace NetCrate {
   IEnumerable<string> Files(string root,string pattern){try{return Directory.Exists(root)?Directory.GetFiles(root,pattern):new string[0];}catch{view.UnreadableFiles++;return new string[0];}}
   IEnumerable<string> Directories(string root){try{return Directory.Exists(root)?Directory.GetDirectories(root):new string[0];}catch{view.UnreadableFiles++;return new string[0];}}
   string ProjectPath(string name){if(String.IsNullOrWhiteSpace(name)||name=="."||name==".."||name.IndexOfAny(new[]{'\\','/',':','*','?','"','<','>','|','\r','\n'})>=0||name.EndsWith(".")||name.EndsWith(" ")||excluded.Contains(name))return null;return Path.Combine(settings.ActiveRoot,name);}
-  string FromSelector(string selector){const string prefix="/D/Video Projects/";return selector.StartsWith(prefix,StringComparison.Ordinal)?ProjectPath(selector.Substring(prefix.Length)):null;}
+  string FromSelector(string selector){string prefix=settings.SnapshotRoot.TrimEnd('/')+"/";return selector.StartsWith(prefix,StringComparison.Ordinal)?ProjectPath(selector.Substring(prefix.Length)):null;}
   string FromSource(string path){try{string full=Path.GetFullPath(path).TrimEnd('\\');return String.Equals(Path.GetDirectoryName(full),Path.GetFullPath(settings.ActiveRoot).TrimEnd('\\'),StringComparison.OrdinalIgnoreCase)?ProjectPath(Path.GetFileName(full)):null;}catch{return null;}}
   Job Get(string path){if(path==null)return null;Job job;if(!jobs.TryGetValue(path,out job)){job=new Job{Id=path,ProjectPath=path,Project=Path.GetFileName(path),UpdatedUtc=DateTime.MinValue,SourceUtc=DateTime.MinValue};jobs.Add(path,job);}return job;}
   IDictionary<string,object> Tail(string path,string type){if(!SafeFolders.IsUnder(path,settings.RunsRoot)&&!SafeFolders.IsUnder(path,settings.BackupRecords))return null;try{if(!path.EndsWith(".backup.jsonl",StringComparison.OrdinalIgnoreCase)||!File.Exists(path)||(File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)return null;string text;using(FileStream stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)){stream.Seek(Math.Max(0,stream.Length-131072),SeekOrigin.Begin);using(StreamReader r=new StreamReader(stream,Encoding.UTF8))text=r.ReadToEnd();}IDictionary<string,object> last=null;foreach(string line in text.Split('\n'))try{var d=json.DeserializeObject(line) as IDictionary<string,object>;if(S(d,"message_type")==type)last=d;}catch{}return last;}catch{return null;}}
