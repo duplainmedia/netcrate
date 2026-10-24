@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
@@ -23,6 +24,7 @@ namespace NetCrate.Setup
         private bool checkingSoftware;
         private CancellationTokenSource checkCancellation;
         private bool closeAfterCheck;
+        private readonly BitmapSource logo;
         private CancellationToken CheckToken { get { return checkCancellation == null ? CancellationToken.None : checkCancellation.Token; } }
 
         public SetupView(SetupController controller)
@@ -36,6 +38,18 @@ namespace NetCrate.Setup
             Background = Theme.Brush(Theme.Background);
             Foreground = Theme.Brush(Theme.Text);
             FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
+            string logoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "NetCrate.png");
+            if (File.Exists(logoPath))
+            {
+                BitmapImage image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.UriSource = new Uri(logoPath);
+                image.EndInit();
+                image.Freeze();
+                logo = image;
+                Icon = logo;
+            }
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Content = shell;
             shell.Background = Theme.Brush(Theme.Background);
@@ -139,10 +153,6 @@ namespace NetCrate.Setup
             main.Children.Add(scroll);
             StackPanel content = new StackPanel { Margin = new Thickness(0, 0, 12, 20) };
             scroll.Content = content;
-            TextBlock label = Text("SET UP NETCRATE", 11, Theme.Accent);
-            label.FontWeight = FontWeights.SemiBold;
-            label.Margin = new Thickness(0, 0, 0, 13);
-            content.Children.Add(label);
             switch (controller.State.Step)
             {
                 case SetupStep.Computer: ComputerScreen(content); break;
@@ -178,11 +188,15 @@ namespace NetCrate.Setup
             StackPanel brand = new StackPanel { Margin = new Thickness(0, 0, 0, 38) };
             TextBlock title = Text("NetCrate", 24, Theme.Text);
             title.FontWeight = FontWeights.SemiBold;
-            brand.Children.Add(title);
-            brand.Children.Add(Text("Your footage.\nYour computers.", 12, Theme.Muted));
+            StackPanel wordmark = new StackPanel { Orientation = Orientation.Horizontal };
+            if (logo != null)
+                wordmark.Children.Add(new Image { Source = logo, Width = 32, Height = 32, Stretch = Stretch.Uniform,
+                    Margin = new Thickness(0, 0, 10, 0), IsHitTestVisible = false });
+            wordmark.Children.Add(title);
+            brand.Children.Add(wordmark);
             DockPanel.SetDock(brand, Dock.Top);
             dock.Children.Add(brand);
-            TextBlock note = Text("Development build\nPairing and round-trip checks are still in development.", 11, Theme.Muted);
+            TextBlock note = Text("Development build", 11, Theme.Muted);
             DockPanel.SetDock(note, Dock.Bottom);
             dock.Children.Add(note);
             StackPanel steps = new StackPanel();
@@ -203,6 +217,11 @@ namespace NetCrate.Setup
             TextBlock heading = Text(title, 28, Theme.Text);
             heading.FontWeight = FontWeights.SemiBold;
             panel.Children.Add(heading);
+            if (String.IsNullOrWhiteSpace(description))
+            {
+                heading.Margin = new Thickness(0, 0, 0, 25);
+                return;
+            }
             TextBlock body = Text(description, 14, Theme.Muted);
             body.Margin = new Thickness(0, 10, 0, 25);
             panel.Children.Add(body);
@@ -210,9 +229,9 @@ namespace NetCrate.Setup
 
         private void ComputerScreen(StackPanel panel)
         {
-            Heading(panel, "Which computer is this?", "Install NetCrate on both computers. Choose the job for the one you are using now.");
-            panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "The computer where you keep your projects and edit. Proxies come back here.", "\uE770"));
-            panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "The other computer. It stores your backups and creates proxies while you keep working.", "\uE977"));
+            Heading(panel, "Which computer is this?", null);
+            panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "Stores your projects and receives proxies.", "\uE770"));
+            panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "Stores backups and creates proxies.", "\uE977"));
             FlowDiagram(panel);
         }
 
@@ -289,7 +308,7 @@ namespace NetCrate.Setup
             bool editing = controller.State.Role == ComputerRole.EditingComputer;
             Heading(panel, editing ? "Where are your projects?" : "Where should backups go?", editing
                 ? "Choose the folder that contains your project folders. You will choose a project to back up after setup."
-                : "Choose a folder on the drive you want to use for backups. Give your footage room to grow.");
+                : "Choose a folder for backups.");
             Border choice = new Border { Background = Theme.Brush(Theme.Surface), BorderBrush = Theme.Brush(Theme.Border), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(22) };
             StackPanel contents = new StackPanel();
             choice.Child = contents;
@@ -301,9 +320,12 @@ namespace NetCrate.Setup
             pick.HorizontalAlignment = HorizontalAlignment.Left;
             contents.Children.Add(pick);
             panel.Children.Add(choice);
-            TextBlock hint = Text(editing ? "Returned proxies go into each project's Proxies folder automatically." : "Selecting a folder does not format the drive or start a backup.", 13, Theme.Muted);
-            hint.Margin = new Thickness(0, 18, 0, 0);
-            panel.Children.Add(hint);
+            if (editing)
+            {
+                TextBlock hint = Text("Returned proxies go into each project's Proxies folder.", 13, Theme.Muted);
+                hint.Margin = new Thickness(0, 18, 0, 0);
+                panel.Children.Add(hint);
+            }
         }
 
         private async void PickFolder()

@@ -46,6 +46,7 @@ $app = Join-Path $output 'NetCrate.exe'
 & $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$PSScriptRoot\App.manifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'Windows app compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NetCrate.ico') -Destination $output -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Assets\NetCrate-AppIcon.png') -Destination (Join-Path $output 'NetCrate.png') -Force
 New-Item -ItemType Directory -Path (Join-Path $output 'install') -Force | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $repo 'install') -File | Copy-Item -Destination (Join-Path $output 'install') -Force
 if (Test-Path -LiteralPath (Join-Path $repo 'THIRD-PARTY.md')) {

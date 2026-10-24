@@ -28,7 +28,7 @@ namespace NetCrate.Setup
             State.Step = State.Role == ComputerRole.None ? SetupStep.Computer
                 : String.IsNullOrEmpty(State.Folder) ? SetupStep.Folders : SetupStep.Prepare;
             lastSaved = State.Copy();
-            LastResult = SetupResult.Done("You can close NetCrate and continue setup later.");
+            LastResult = SetupResult.Done("");
         }
 
         public bool CanContinue
