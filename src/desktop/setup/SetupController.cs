@@ -16,6 +16,8 @@ namespace NetCrate.Setup
         public bool Busy { get; private set; }
         public bool IsInstalling { get; private set; }
         public string ProgressMessage { get; private set; }
+        public string PairingCode { get; private set; }
+        public string PairingStage { get; private set; }
         public event EventHandler Changed;
 
         public SetupController(ISetupService service, ISetupStore store)
@@ -43,7 +45,7 @@ namespace NetCrate.Setup
                     case SetupStep.Prepare: return State.Prepared &&
                         (State.Role != ComputerRole.BackupServer || State.RecoveryConfirmed);
                     case SetupStep.Connect: return State.Connected;
-                    case SetupStep.Check: return State.Role == ComputerRole.EditingComputer && State.SampleVerified;
+                    case SetupStep.Check: return State.Role == ComputerRole.BackupServer ? State.Connected : State.SampleVerified;
                     default: return false;
                 }
             }
@@ -86,6 +88,7 @@ namespace NetCrate.Setup
             {
                 State.Role = role;
                 State.Folder = null;
+                State.NetworkAddress = null;
                 State.RecoveryExported = false;
                 State.RecoveryConfirmed = false;
                 State.InvalidateChecks();
@@ -126,10 +129,9 @@ namespace NetCrate.Setup
         public async Task InspectAsync(CancellationToken token)
         {
             RequireIdle();
-            bool wasPrepared = State.Prepared;
             State.InvalidateChecks();
             await RunAsync(() => service.InspectAsync(State.Copy(), token), token);
-            State.Prepared = wasPrepared && LastResult.Succeeded;
+            State.Prepared = LastResult.Succeeded;
             Notify(true);
         }
 
@@ -209,6 +211,55 @@ namespace NetCrate.Setup
                 throw new InvalidOperationException("Prepare this computer before connecting.");
         }
 
+        public Task ConfirmConnectionAsync(string code, CancellationToken token)
+        {
+            RequireIdle(); RequireConnectionStep();
+            State.Connected = false;
+            return RunInstallationAsync(() => service.ConfirmConnectionAsync(State.Copy(), code, token), token);
+        }
+
+        public void UseNetworkAddress(string address)
+        {
+            RequireIdle(); RequireConnectionStep();
+            System.Net.IPAddress ip;
+            if (!String.IsNullOrWhiteSpace(address))
+            {
+                if (!System.Net.IPAddress.TryParse(address, out ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                    throw new InvalidOperationException("Enter this computer's private IPv4 address.");
+                byte[] bytes = ip.GetAddressBytes();
+                if (!(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+                    (bytes[0] == 192 && bytes[1] == 168) || (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127)))
+                    throw new InvalidOperationException("Use an address on your private network.");
+                address = ip.ToString();
+            }
+            State.NetworkAddress = address;
+            State.Connected = false; State.SampleVerified = false;
+            PairingCode = ""; PairingStage = "";
+            LastResult = SetupResult.Done(String.IsNullOrWhiteSpace(address) ? "Automatic NetBird address selection is enabled." : "Using this computer's existing private connection: " + address);
+            Notify(true);
+        }
+
+        public Task NetworkAsync(CancellationToken token)
+        {
+            RequireIdle(); RequireConnectionStep();
+            return RunInstallationAsync(() => service.NetworkAsync(State.Copy(), token), token);
+        }
+
+        private async Task RunInstallationAsync(Func<Task<SetupResult>> action, CancellationToken token)
+        {
+            IsInstalling = true;
+            try { await RunAsync(action, token); }
+            finally { IsInstalling = false; Notify(false); }
+        }
+
+        public Task FinishAsync(CancellationToken token)
+        {
+            RequireIdle();
+            if (State.Step != SetupStep.Complete || !State.Connected || (State.Role == ComputerRole.EditingComputer && !State.SampleVerified))
+                throw new InvalidOperationException("Finish the connection and sample checks first.");
+            return RunAsync(() => service.FinishAsync(State.Copy(), token), token);
+        }
+
         public async Task CheckSampleAsync(CancellationToken token)
         {
             RequireIdle();
@@ -240,6 +291,8 @@ namespace NetCrate.Setup
                 LastResult = await operation();
                 token.ThrowIfCancellationRequested();
                 if (LastResult == null) throw new InvalidOperationException("No check result was returned.");
+                if (!String.IsNullOrEmpty(LastResult.PairingCode)) PairingCode = LastResult.PairingCode;
+                if (!String.IsNullOrEmpty(LastResult.PairingStage)) PairingStage = LastResult.PairingStage;
             }
             catch (OperationCanceledException)
             {

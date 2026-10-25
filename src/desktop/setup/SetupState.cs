@@ -13,6 +13,7 @@ namespace NetCrate.Setup
         public ComputerRole Role { get; set; }
         public SetupStep Step { get; set; }
         public string Folder { get; set; }
+        public string NetworkAddress { get; set; }
         public bool Prepared { get; set; }
         public bool RecoveryExported { get; set; }
         public bool RecoveryConfirmed { get; set; }
@@ -40,6 +41,8 @@ namespace NetCrate.Setup
         public bool Succeeded { get; private set; }
         public string Code { get; private set; }
         public string Message { get; private set; }
+        public string PairingCode { get; set; }
+        public string PairingStage { get; set; }
         public IList<SoftwareCheck> Software { get; set; }
 
         private SetupResult(bool succeeded, string code, string message)

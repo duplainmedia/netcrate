@@ -1,4 +1,7 @@
 using System;
+using System.IO;
+using System.Threading;
+using Forms=System.Windows.Forms;
 using System.Linq;
 using System.Collections.Generic;
 using System.Windows;
@@ -94,7 +97,24 @@ namespace NetCrate {
   }
   void BuildCommands(Grid main) {
    DockPanel commands=new DockPanel { Margin=new Thickness(24,0,14,10) };Grid.SetRow(commands,1);main.Children.Add(commands);StackPanel actions=new StackPanel { Orientation=Orientation.Horizontal };DockPanel.SetDock(actions,Dock.Right);commands.Children.Add(actions);
+   if(settings.Role=="Source") { Button backup=new Button { Content=CommandContent("\uE898","Back up a project") };AutomationProperties.SetName(backup,"Back up a project");backup.Click+=delegate { QueueProjectBackup(); };actions.Children.Add(backup); }
    openProject=new Button { Content=CommandContent("\uE8B7","Open project") };AutomationProperties.SetName(openProject,"Open project");openProject.Click+=delegate { JobRow row=jobsGrid.SelectedItem as JobRow;if(row!=null)OpenFolder(row.Job.ProjectPath); };actions.Children.Add(openProject);openProxies=new Button { Content=CommandContent("\uE714","Open proxies") };AutomationProperties.SetName(openProxies,"Open proxies");openProxies.Click+=delegate { JobRow row=jobsGrid.SelectedItem as JobRow;if(row!=null)OpenFolder(row.Job.ResultFolder); };actions.Children.Add(openProxies);actions.Children.Add(new Border { Background=Brush(border),Width=1,Height=18,Margin=new Thickness(8,0,8,0) });Button refresh=new Button { Content=Glyph("\uE72C",14,fg),ToolTip="Refresh",Width=36 };AutomationProperties.SetName(refresh,"Refresh jobs");refresh.Click+=delegate { Refresh(); };actions.Children.Add(refresh);headingStatus=Text("Reading jobs...",12,muted);headingStatus.VerticalAlignment=VerticalAlignment.Center;commands.Children.Add(headingStatus);
+  }
+  async void QueueProjectBackup() {
+   using(Forms.FolderBrowserDialog picker=new Forms.FolderBrowserDialog()) {
+    picker.Description="Choose a project directly inside your project folder";picker.SelectedPath=settings.ActiveRoot;picker.ShowNewFolderButton=false;
+    if(picker.ShowDialog()!=Forms.DialogResult.OK)return;
+    string path=Path.GetFullPath(picker.SelectedPath).TrimEnd('\\');
+    if(!String.Equals(Path.GetDirectoryName(path),settings.ActiveRoot.TrimEnd('\\'),StringComparison.OrdinalIgnoreCase)||!SafeFolders.NoLinks(path)) {
+     MessageBox.Show(window,"Choose one project folder directly inside "+settings.ActiveRoot+".","NetCrate",MessageBoxButton.OK,MessageBoxImage.Information);return;
+    }
+    Setup.SetupState state=new Setup.SetupState { InstallationId=settings.InstallationId,Role=Setup.ComputerRole.EditingComputer,Folder=settings.ActiveRoot };
+    Setup.WindowsSetupService service=new Setup.WindowsSetupService(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"install"));
+    try {
+     Setup.SetupResult result=await service.InvokePreparationAsync("QueueBackup",state,CancellationToken.None,path);
+     MessageBox.Show(window,result.Message,"NetCrate",MessageBoxButton.OK,MessageBoxImage.Information);Refresh();
+    }catch(Exception){MessageBox.Show(window,"The backup could not be queued. Check the project folder, then try again.","NetCrate",MessageBoxButton.OK,MessageBoxImage.Information);}
+   }
   }
   DataGrid CreateJobGrid() {
    DataGrid grid=new DataGrid { AutoGenerateColumns=false,IsReadOnly=true,CanUserAddRows=false,CanUserDeleteRows=false,CanUserResizeRows=false,CanUserReorderColumns=false,SelectionMode=DataGridSelectionMode.Single,SelectionUnit=DataGridSelectionUnit.FullRow,HeadersVisibility=DataGridHeadersVisibility.Column,RowHeaderWidth=0,RowHeight=38,ColumnHeaderHeight=40,GridLinesVisibility=DataGridGridLinesVisibility.Vertical,VerticalGridLinesBrush=Brush(dark?"#19283C":"#EEEEEE"),Background=Brush(card),Foreground=Brush(fg),BorderThickness=new Thickness(0),FontSize=12 };AutomationProperties.SetName(grid,"Jobs");ScrollViewer.SetHorizontalScrollBarVisibility(grid,ScrollBarVisibility.Disabled);ScrollViewer.SetVerticalScrollBarVisibility(grid,ScrollBarVisibility.Auto);

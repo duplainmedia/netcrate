@@ -92,6 +92,7 @@ namespace NetCrate {
    if(receiver!=null&&S(receiver,"State")=="RetryPending"){view.ServiceAttention=true;view.ServiceMessage="The results receiver needs attention. "+S(receiver,"Message");}
    if(receiver!=null&&S(receiver,"State")=="Receiving")view.Activity="Downloading and verifying generated media from WORKER-PC.";
    ApplyProgressReaderHealth();
+   ReadGuidedJobs();
    view.Jobs=jobs.Values.OrderByDescending(j=>j.Attention).ThenByDescending(j=>j.Active).ThenByDescending(j=>j.UpdatedUtc).ToList();return view;
   }
  }

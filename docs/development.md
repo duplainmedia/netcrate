@@ -1,49 +1,39 @@
-# Building and checking NetCrate
+# Development and verification
 
-This branch contains the first native guided-setup implementation. It is not a completed fresh-install release.
-
-## Build
-
-Use a Windows x64 development machine with .NET Framework 4.8 and its C# compiler. From the repository root, run:
+Build on Windows x64 with .NET Framework 4.8:
 
 ```powershell
 .\src\desktop\Build.ps1
 ```
 
-The build runs the desktop model, setup controller, native folder, saved-state and settings tests, then writes `build\NetCrate.exe`. Launching that executable opens setup when a NetCrate settings file is absent. It does not read an older deployment's configuration. The software preparation actions run only after the user clicks the preparation button.
+The build runs desktop model, setup controller, persistence, folder, timeout and accessibility checks. `build\NetCrate.exe` opens setup if this Windows account has no completed NetCrate settings. The build folder includes the backend scripts and a generated sample clip. Preparation starts only after the user selects it.
 
-The output folder includes the setup engine scripts. Keep them alongside the executable. Normal users should eventually receive an installer; these build commands are for development.
+Normal users follow [setup](setup.md). They do not run development commands or edit configuration files.
 
-## Current behavior
+## Runtime
 
-- The first screen asks "Which computer is this?" and offers Editing Computer and Backup Server.
-- A native Windows picker selects the project parent folder or backup storage. Checks reject drive roots, unavailable folders, links, cloud-managed ancestors and unwritable storage.
-- Non-secret choices are saved atomically in the current Windows user's NetCrate setup folder. Restarting repeats software and peer checks. A corrupt state file is preserved and reported.
-- Software preparation detects role-specific dependencies, installs supported missing packages through pinned WinGet entries, and checks the result before proceeding. A failed or declined installation can be retried. Read-only software checks have deadlines and can be cancelled. An active package installation finishes before another attempt is allowed.
-- The Backup Server cannot advance without a separately saved and confirmed recovery copy. The editing role cannot finish without a successful sample round trip.
+The app stores its owned engine under `%LOCALAPPDATA%\NetCrate\Engine`. It keeps a separate installation identity, current-user DPAPI records, pinned tool distributions, repository bindings and durable job state. The two repositories have independently generated passwords. The backup endpoint uses TLS 1.3, bcrypt authentication, private repositories and append-only access. A scoped Windows Firewall rule permits the paired editing address only.
 
-The final two gates are tested controller contracts. Repository creation, key protection, recovery export, recipient-bound pairing and the actual sample pipeline are not connected to this build. Their service methods return an unavailable result and cannot mark setup complete. The inherited source and worker scripts also retain fictional deployment constants while shared configuration and protocol work continues. They are not an installation path.
+Pairing uses signed public requests and encrypted replies bound to both installation identities. Manual device and connection code comparisons precede credential activation. Connection checks verify the actual repository identities and a signed acknowledgement. Network sign-in uses NetBird's own UI.
 
-The media modules were checked with Python 3.12.14 and Pillow 12.3. A supported fresh Python distribution and its integrity checks still need validation. The app therefore does not guess a Python installer or downgrade an existing runtime.
+One owned task runs under the installing Windows account when it is signed in. It resumes at sign-in after a reboot. It does not run as SYSTEM or claim signed-out service operation. Development tests do not register this task or alter an installed deployment.
 
-## Verification
+The active entry points are `install/Invoke-SetupAction.ps1`, `src/shared/Invoke-NetCrateRuntime.ps1` and `src/worker/netcrate_media.py`. Older imported source and worker scripts are retained as reference while migration and compatibility checks continue. They are not called by guided installation.
 
-```powershell
-.\tests\installation\Test-Preparation.ps1 -TestRoot "$env:TEMP\NetCrate-Preparation-Test"
-$env:PYTHONPATH = "$PWD\src\worker"
-python -B -m unittest discover -s tests\worker
-Get-ChildItem tests\worker -Filter Test-*.ps1 | ForEach-Object { & $_.FullName }
-```
+## Media and delivery
 
-The preparation tests use injected process adapters. They do not install packages. The native folder tests use temporary local folders. Pass `-TestRoot` to the desktop build if the default temporary folder is inside a linked or cloud-managed directory. Use a short temporary path for worker tests because the inherited Windows file operations have path-length limits.
+The default recipe is `half-prores-v2`: half-size ProRes Proxy, 10-bit 4:2:2, source frame rate, PCM 24-bit audio, source metadata and timecode. The alternative `quarter-prores-v1` uses quarter-size video. Contact sheets contain twelve source frames at 1232 by 1176 pixels, without a creative LUT.
 
-The native FFmpeg test remains opt-in. Package installation, Windows approval, a fresh account, reboot recovery and a two-computer round trip have not been validated by controller tests. Those checks are required before a public release.
+Requests identify an exact successful source snapshot and a recipe-dependent footage fingerprint derived from Restic content identities. The server independently derives that identity, restores with verification, encodes and checks the media. Reusing a generation creates a new association that preserves both the newly requested snapshot and the original generation snapshot.
 
-For a reproducible view of the actual WPF controls without changing setup choices:
+The Editing Computer validates signatures, identities, recipe, manifest membership, sizes and hashes before promoting an immutable version under the project's `Proxies\NetCrate` folder. Unexpected files, links, path traversal and case collisions are rejected. No operation deletes earlier backup snapshots or proxy versions.
 
-```powershell
-.\build\NetCrate.exe --render-setup "$env:TEMP\netcrate-setup.png"
-.\build\NetCrate.exe --render-setup "$env:TEMP\netcrate-folders.png" --folders --compact
-```
+## Tests
 
-These render modes use an in-memory setup store. They do not install tools or touch a configured backup.
+Run shared configuration, protocol, pairing and dependency tests with PowerShell 7.6.5. Supply a new, ordinary local folder for each filesystem fixture. Avoid OneDrive paths: rejecting linked ancestors is intentional.
+
+`tests/installation/Test-Workflow.ps1` accepts explicit Restic, Python and FFmpeg paths, plus an optional rest-server path for the authenticated HTTPS workflow. It uses generated footage and new repositories, checks unchanged-footage reuse, changed recipes, interrupted delivery, queue resume, retained versions and corrupt results. `Test-Transport.ps1` also checks certificate rejection. These fixtures require local loopback networking; restricted sandboxes may block it.
+
+`tests/worker` and the older source helper tests cover inherited media and protocol behavior. They are regression checks, separate from fresh installation acceptance.
+
+Before public release, verify on two separate Windows computers: fresh-account installation, NetBird sign-in, firewall approval, file exchange, sample delivery, a real project, offline resume, sign-in after reboot and recovery with the saved file under a fresh account. A localhost fixture does not establish those results.

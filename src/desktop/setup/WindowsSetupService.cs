@@ -75,7 +75,7 @@ namespace NetCrate.Setup
             return await InvokePreparationAsync("Prepare", state, token);
         }
 
-        private async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token)
+        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null)
         {
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
             if (!File.Exists(script))
@@ -84,7 +84,7 @@ namespace NetCrate.Setup
                 return SetupResult.ActionRequired("setup-folder-linked", "The NetCrate setup folder contains a link. Check the folder before trying again.");
             Directory.CreateDirectory(setupRoot);
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
-            File.WriteAllText(input, json.Serialize(new { Version = 1, Role = state.Role.ToString() }));
+            File.WriteAllText(input, json.Serialize(new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }));
             try
             {
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\WindowsPowerShell\v1.0\powershell.exe");
@@ -102,9 +102,9 @@ namespace NetCrate.Setup
                     Task<string> errors = process.StandardError.ReadToEndAsync();
                     // Finish the package manager operation before allowing another attempt.
                     // Cancelling an installer process can leave its child installer running.
-                    if (action == "Inspect")
+                    if (action != "Prepare" && action != "Network" && action != "ConfirmConnection")
                     {
-                        bool finished = await InspectionProcess.WaitAsync(process, TimeSpan.FromSeconds(90), token);
+                        bool finished = await InspectionProcess.WaitAsync(process, TimeSpan.FromSeconds(action == "CheckSample" ? 1250 : 90), token);
                         if (!finished)
                             return SetupResult.ActionRequired("probe-timeout", "A software check took too long. Close other installers, then choose Try again.");
                     }
@@ -118,6 +118,9 @@ namespace NetCrate.Setup
                     bool succeeded = process.ExitCode == 0 && record["Succeeded"] is bool && (bool)record["Succeeded"];
                     SetupResult result = succeeded ? SetupResult.Done(Convert.ToString(record["Message"]))
                         : SetupResult.ActionRequired(Convert.ToString(record["Code"]), Convert.ToString(record["Message"]));
+                    object value;
+                    if (record.TryGetValue("PairingCode", out value)) result.PairingCode = Convert.ToString(value);
+                    if (record.TryGetValue("PairingStage", out value)) result.PairingStage = Convert.ToString(value);
                     object software;
                     if (record.TryGetValue("Software", out software) && software is object[])
                         foreach (object item in (object[])software)
@@ -141,19 +144,28 @@ namespace NetCrate.Setup
         }
 
         public Task<SetupResult> SaveRecoveryAsync(SetupState state, string path, CancellationToken token)
-        { return Unavailable("recovery-not-available", "Recovery details will be available after repository and key setup are connected in this development build."); }
+        { return InvokePreparationAsync("SaveRecovery", state, token, path); }
 
         public Task<SetupResult> ExportConnectionAsync(SetupState state, string path, CancellationToken token)
-        { return Unavailable("pairing-not-available", "Computer pairing is not available in this development build yet."); }
+        { return InvokePreparationAsync("ExportConnection", state, token, path); }
 
         public Task<SetupResult> ImportConnectionAsync(SetupState state, string path, CancellationToken token)
-        { return Unavailable("pairing-not-available", "Computer pairing is not available in this development build yet."); }
+        { return InvokePreparationAsync("ImportConnection", state, token, path); }
+
+        public Task<SetupResult> ConfirmConnectionAsync(SetupState state, string code, CancellationToken token)
+        { return InvokePreparationAsync("ConfirmConnection", state, token, null, code); }
+
+        public Task<SetupResult> NetworkAsync(SetupState state, CancellationToken token)
+        { return InvokePreparationAsync("Network", state, token); }
+
+        public Task<SetupResult> FinishAsync(SetupState state, CancellationToken token)
+        { return InvokePreparationAsync("Finish", state, token); }
 
         public Task<SetupResult> CheckConnectionAsync(SetupState state, CancellationToken token)
-        { return Unavailable("pairing-not-available", "Computer pairing is not available in this development build yet."); }
+        { return InvokePreparationAsync("CheckConnection", state, token); }
 
         public Task<SetupResult> CheckSampleAsync(SetupState state, IProgress<string> progress, CancellationToken token)
-        { return Unavailable("sample-not-available", "The sample check will be available when both computer roles are connected. This build cannot verify the round trip yet."); }
+        { return InvokePreparationAsync("CheckSample", state, token); }
 
         private static Task<SetupResult> Unavailable(string code, string message)
         { return Task.FromResult(SetupResult.ActionRequired(code, message)); }

@@ -54,6 +54,11 @@ class SetupTests
         Assert(setup.State.Prepared && setup.CanContinue, "Successful preparation did not unlock connection.");
         setup.Continue();
         service.ConnectionResult = SetupResult.ActionRequired("sign-in-needed", "Finish signing in to your private network.");
+        setup.UseNetworkAddress("10.44.0.2");
+        Assert(setup.State.NetworkAddress == "10.44.0.2", "An existing private connection choice was not saved.");
+        Reject(() => setup.UseNetworkAddress("8.8.8.8"), "A public address was accepted as an existing private connection.");
+        await setup.ConfirmConnectionAsync("1234 5678 9012 3456", CancellationToken.None);
+        Assert(!setup.State.Connected, "Comparing codes was treated as a live connection check.");
         await setup.CheckConnectionAsync(CancellationToken.None);
         Assert(!setup.State.Connected && !setup.CanContinue, "Unfinished sign-in advanced setup.");
         service.ConnectionResult = SetupResult.ActionRequired("wrong-recipient", "Choose the connection file made for this computer.");
@@ -99,8 +104,8 @@ class SetupTests
         await resumed.CheckConnectionAsync(CancellationToken.None);
         resumed.Continue();
         await resumed.CheckSampleAsync(CancellationToken.None);
-        Assert(!resumed.CanContinue && !resumed.State.SampleVerified,
-            "A server-side local check claimed the editing computer's verified round trip.");
+        Assert(resumed.CanContinue && !resumed.State.SampleVerified,
+            "The connected server could not finish local setup without claiming the editing computer's round trip.");
 
         FakeSetupService interruptedService = new FakeSetupService();
         SetupController interrupted = new SetupController(interruptedService, new MemorySetupStore());
@@ -194,6 +199,12 @@ class SetupTests
         public Task<SetupResult> ImportConnectionAsync(SetupState state, string path, CancellationToken token)
         { return Task.FromResult(ConnectionResult); }
         public Task<SetupResult> CheckConnectionAsync(SetupState state, CancellationToken token)
+        { return Task.FromResult(ConnectionResult); }
+        public Task<SetupResult> ConfirmConnectionAsync(SetupState state, string code, CancellationToken token)
+        { return Task.FromResult(ConnectionResult); }
+        public Task<SetupResult> NetworkAsync(SetupState state, CancellationToken token)
+        { return Task.FromResult(ConnectionResult); }
+        public Task<SetupResult> FinishAsync(SetupState state, CancellationToken token)
         { return Task.FromResult(ConnectionResult); }
         public Task<SetupResult> CheckSampleAsync(SetupState state, IProgress<string> progress, CancellationToken token)
         { return Task.FromResult(SampleResult); }

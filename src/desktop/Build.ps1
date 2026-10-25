@@ -20,8 +20,9 @@ $state = Join-Path $PSScriptRoot 'setup\SetupState.cs'
 $store = Join-Path $PSScriptRoot 'setup\JsonSetupStore.cs'
 $service = Join-Path $PSScriptRoot 'setup\ISetupService.cs'
 $settings = Join-Path $PSScriptRoot 'Settings.cs'
-$models = @($settings, $store, $state) + @('AppModel.cs', 'ProgressModel.cs', 'VersionModel.cs' | ForEach-Object { Join-Path $PSScriptRoot $_ })
+$models = @($settings, $store, $state) + @('AppModel.cs', 'ProgressModel.cs', 'VersionModel.cs', 'GuidedModel.cs' | ForEach-Object { Join-Path $PSScriptRoot $_ })
 Build-Test 'AppTests' ($models + (Join-Path $PSScriptRoot 'AppTests.cs'))
+Build-Test 'GuidedModelTests' ($models + (Join-Path $repo 'tests\desktop\GuidedModelTests.cs')) @((Join-Path $TestRoot ('G-' + [guid]::NewGuid().ToString('N').Substring(0, 8))))
 Build-Test 'SetupTests' @($state, $service, (Join-Path $PSScriptRoot 'setup\SetupController.cs'), (Join-Path $repo 'tests\desktop\SetupTests.cs'))
 $inspection = Join-Path $PSScriptRoot 'setup\InspectionProcess.cs'
 Build-Test 'SetupStorageTests' @($state, $store, $service, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $repo 'tests\desktop\SetupStorageTests.cs')) @($TestRoot, (Join-Path $repo 'install'))
@@ -49,6 +50,11 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NetCrate.ico') -Destination $ou
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Assets\NetCrate-AppIcon.png') -Destination (Join-Path $output 'NetCrate.png') -Force
 New-Item -ItemType Directory -Path (Join-Path $output 'install') -Force | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $repo 'install') -File | Copy-Item -Destination (Join-Path $output 'install') -Force
+foreach ($folder in @('shared', 'worker')) {
+    $target = Join-Path $output ('src\' + $folder)
+    New-Item -ItemType Directory -Path $target -Force | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $repo ('src\' + $folder)) -File | Copy-Item -Destination $target -Force
+}
 if (Test-Path -LiteralPath (Join-Path $repo 'THIRD-PARTY.md')) {
     Copy-Item -LiteralPath (Join-Path $repo 'THIRD-PARTY.md') -Destination $output -Force
 }

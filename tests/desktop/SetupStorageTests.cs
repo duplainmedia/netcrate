@@ -63,7 +63,7 @@ class SetupStorageTests
                 string engineState = Path.Combine(root, "engine-state");
                 WindowsSetupService engine = new WindowsSetupService(args[1], engineState);
                 result = engine.InspectAsync(state, CancellationToken.None).Result;
-                Assert(result.Software.Count == 2, "The native PowerShell inspection did not return the editing software list.");
+                Assert(!result.Succeeded && result.Code == "prepare-needed", "A fresh native inspection did not request preparation.");
                 Assert(Directory.GetFiles(engineState).Length == 0, "Inspection retained its input file.");
                 Assert(!Directory.Exists(Path.Combine(engineState, "Preparation")), "Inspection wrote an installation checkpoint.");
             }

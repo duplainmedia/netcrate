@@ -12,6 +12,9 @@ namespace NetCrate.Setup
         Task<SetupResult> SaveRecoveryAsync(SetupState state, string path, CancellationToken token);
         Task<SetupResult> ExportConnectionAsync(SetupState state, string path, CancellationToken token);
         Task<SetupResult> ImportConnectionAsync(SetupState state, string path, CancellationToken token);
+        Task<SetupResult> ConfirmConnectionAsync(SetupState state, string code, CancellationToken token);
+        Task<SetupResult> NetworkAsync(SetupState state, CancellationToken token);
+        Task<SetupResult> FinishAsync(SetupState state, CancellationToken token);
         Task<SetupResult> CheckConnectionAsync(SetupState state, CancellationToken token);
         Task<SetupResult> CheckSampleAsync(SetupState state, IProgress<string> progress, CancellationToken token);
     }

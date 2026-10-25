@@ -1,0 +1,13 @@
+{
+  "Version": 1,
+  "Packages": [
+    { "Name": "PowerShell", "Version": "7.6.5", "Roles": ["Source", "Worker"], "Url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/PowerShell-7.6.5-win-x64.zip", "SHA256": "32eb8f6cdce08f86e987d625a2733e54ac3e289ae7e1621b14c0b5bcec2434ea", "Executable": "pwsh.exe" },
+    { "Name": "Restic", "Version": "0.19.1", "Roles": ["Source", "Worker"], "Url": "https://github.com/restic/restic/releases/download/v0.19.1/restic_0.19.1_windows_amd64.zip", "SHA256": "da948ad707ed690426473aaba2046cd61f8f90f6f0e7dab6be0d5796531de67d", "Executable": "restic_0.19.1_windows_amd64.exe" },
+    { "Name": "RestServer", "Version": "0.14.0", "Roles": ["Worker"], "Url": "https://github.com/restic/rest-server/releases/download/v0.14.0/rest-server_0.14.0_windows_amd64.zip", "SHA256": "98e31e33816861722e0f04c7f56811a3ff2f37e006def217ad6eda8e438c9d82", "Executable": "rest-server_0.14.0_windows_amd64/rest-server.exe" },
+    { "Name": "Python", "Version": "3.14.9", "Roles": ["Worker"], "Url": "https://www.python.org/ftp/python/3.14.9/python-3.14.9-amd64.zip", "SHA256": "874d01bac04b470c6e1422dfccb9e182b9efe90c6a8adc5fc50d66bf84c40191", "Executable": "python.exe" },
+    { "Name": "FFmpeg", "Version": "9.0.1", "Roles": ["Worker"], "Url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-full_build.zip", "SHA256": "2e8e28af97c2ae338ccef92e36da9b2a4cd21d0cad9dde093545606cb07f5b00", "Executable": "ffmpeg-9.0.1-full_build/bin/ffmpeg.exe" },
+    { "Name": "Pillow", "Version": "12.3.0", "Roles": ["Worker"], "Url": "https://files.pythonhosted.org/packages/f1/e0/492879f69d94f91f60fc8cd05ba03650e9520afebb2fb7aa12777d7c7f38/pillow-12.3.0-cp314-cp314-win_amd64.whl", "SHA256": "fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d", "Executable": "PIL/__init__.py" },
+    { "Name": "Bcrypt", "Version": "5.0.0", "Roles": ["Worker"], "Url": "https://files.pythonhosted.org/packages/9f/b9/9d9a641194a730bda138b3dfe53f584d61c58cd5230e37566e83ec2ffa0d/bcrypt-5.0.0-cp39-abi3-win_amd64.whl", "SHA256": "64ee8434b0da054d830fa8e89e1c8bf30061d539044a39524ff7dec90481e5c2", "Executable": "bcrypt/__init__.py" }
+  ],
+  "NetBird": { "Version": "0.81.3", "Url": "https://github.com/netbirdio/netbird/releases/download/v0.81.3/netbird_installer_0.81.3_windows_amd64.msi", "SHA256": "e378b2788e3586cc1d8c8199fb0c733d428bb77d971a0571911ac4b99757044a" }
+}

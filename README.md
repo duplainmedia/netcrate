@@ -14,13 +14,13 @@ I built it because it makes my own workflow easier. I’m sharing it because it 
 
 ## Development status
 
-The guided setup is in development. The Windows app now includes the computer choice, native folder picking, saved setup choices, software checks and a dark navy interface. Preparation can install pinned PowerShell, Restic and FFmpeg packages through Windows Package Manager.
+This branch includes a Windows setup wizard for an Editing Computer and a Backup Server. It installs verified tools, creates encrypted backup storage, saves recovery details, connects the computers and runs a sample through the backup and proxy workflow.
 
-Computer pairing, repository and key creation, independent recovery export, automatic Python installation and the sample round trip are still being connected. This build stops at unfinished steps. It cannot complete a new backup installation yet.
+Setup uses Windows dialogs and buttons. After setup, choose **Back up a project** in NetCrate. The server creates ProRes Proxy files and contact sheets, and the Editing Computer verifies the returned files before showing them as ready. Earlier proxy versions remain available.
 
-The source and worker components are included for development. Their configuration and protocol still need to be generalized and verified together before release. Keep testing separate from existing backups and footage.
+The guided workflow has been tested with disposable repositories and generated footage. Testing on two separate Windows computers, including sign-in after a restart and recovery under a fresh account, is still required before a public release. Both computers must stay on and signed in while tasks run.
 
-See [development and verification](docs/development.md) for build instructions and current limits. There is no packaged release yet.
+See [setting up both computers](docs/setup.md) for the user workflow and [development and verification](docs/development.md) for build instructions. There is no public release download yet.
 
 ## License
 

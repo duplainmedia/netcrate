@@ -9,22 +9,25 @@ namespace NetCrate
 {
     internal static class SetupStartup
     {
-        public static void Run()
+        public static bool Run()
         {
             string setupRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetCrate", "Setup");
             string engine = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "install");
             SetupController controller = new SetupController(new WindowsSetupService(engine, setupRoot),
                 new JsonSetupStore(Path.Combine(setupRoot, "state.json")));
             Application app = new Application();
-            app.Run(new SetupView(controller));
+            SetupView view = new SetupView(controller);
+            app.Run(view);
+            return view.SetupCompleted;
         }
 
-        public static void Render(string output, bool folders, bool compact)
+        public static void Render(string output, bool folders, bool compact, bool connect = false)
         {
             Application app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             SetupState state = new SetupState();
             if (folders) state.Role = ComputerRole.EditingComputer;
             SetupController controller = new SetupController(new WindowsSetupService(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "install")), new PreviewStore(state));
+            if (connect) { controller.State.Role = ComputerRole.EditingComputer; controller.State.Step = SetupStep.Connect; controller.State.Prepared = true; }
             SetupView view = new SetupView(controller);
             if (compact) { view.Width = view.MinWidth; view.Height = view.MinHeight; }
             view.Show();

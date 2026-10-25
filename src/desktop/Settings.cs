@@ -19,6 +19,9 @@ namespace NetCrate
         public string SnapshotRoot { get; set; }
         public string SourceComputer { get; set; }
         public string WorkerComputer { get; set; }
+        public string StateRoot { get; set; }
+        public string Role { get; set; }
+        public string InstallationId { get; set; }
 
         public static string DefaultPath
         {
@@ -46,6 +49,10 @@ namespace NetCrate
                 Settings settings = FromRoots(active, state);
                 settings.SourceComputer = source;
                 settings.WorkerComputer = worker;
+                settings.Role = role;
+                object value;
+                if (data.TryGetValue("InstallationId", out value) && value is string) settings.InstallationId = (string)value;
+                if (role == "Worker" && data.TryGetValue("WorkRoot", out value) && value is string) settings.OutputRoot = NormalizeRoot((string)value);
                 return settings;
             }
             catch (InvalidDataException) { throw; }
@@ -84,6 +91,7 @@ namespace NetCrate
         {
             return new Settings
             {
+                StateRoot = state,
                 ActiveRoot = active,
                 OutputRoot = active,
                 SnapshotRoot = "/" + Char.ToUpperInvariant(active[0]) + active.Substring(2).Replace('\\', '/'),

@@ -31,13 +31,13 @@ namespace NetCrate {
   [STAThread]public static void Main(string[] args){
    try {
     try{SetProcessDpiAwarenessContext(new IntPtr(-4));}catch{}
-    if(args.Length>=2&&args[0]=="--render-setup"){SetupStartup.Render(args[1],args.Contains("--folders"),args.Contains("--compact"));return;}
+    if(args.Length>=2&&args[0]=="--render-setup"){SetupStartup.Render(args[1],args.Contains("--folders"),args.Contains("--compact"),args.Contains("--connect"));return;}
     if(args.Length==2&&args[0]=="--dump"){File.WriteAllText(args[1],new JavaScriptSerializer().Serialize(new JobReader(Settings.Local()).Read()));return;}
     if(args.Length==2&&args[0]=="--render"){JobApplication preview=new JobApplication(Settings.Preview(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])),"preview-data")));preview.ShutdownMode=ShutdownMode.OnExplicitShutdown;preview.BuildWindow();preview.Apply(new JobReader(preview.settings).Read());preview.window.Show();preview.window.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render,new Action(delegate{}));preview.window.UpdateLayout();RenderTargetBitmap bitmap=new RenderTargetBitmap((int)preview.window.ActualWidth,(int)preview.window.ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(preview.window);PngBitmapEncoder encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using(FileStream f=File.Create(args[1]))encoder.Save(f);preview.quitting=true;preview.window.Close();preview.Shutdown();return;}
     bool created;using(Mutex mutex=new Mutex(true,EventPrefix()+"-instance",out created)){
-     if(!created){try{using(EventWaitHandle ev=EventWaitHandle.OpenExisting(EventPrefix()+(args.Contains("--exit")?"-exit":args.Contains("--test-notification")?"-test":"-show")))ev.Set();}catch{}return;}
+     if(!created&&!mutex.WaitOne(1000)){try{using(EventWaitHandle ev=EventWaitHandle.OpenExisting(EventPrefix()+(args.Contains("--exit")?"-exit":args.Contains("--test-notification")?"-test":"-show")))ev.Set();}catch{}return;}
      if(args.Contains("--exit")){mutex.ReleaseMutex();return;}
-     if(args.Contains("--setup")||!File.Exists(Settings.DefaultPath)){SetupStartup.Run();mutex.ReleaseMutex();return;}
+     if(args.Contains("--setup")||!File.Exists(Settings.DefaultPath)){bool finished=SetupStartup.Run();mutex.ReleaseMutex();if(finished)Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location){UseShellExecute=true});return;}
      JobApplication app=new JobApplication();app.Start(args);app.Run();mutex.ReleaseMutex();
     }
    } catch(Exception ex){try{string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"NetCrate\Monitor");Directory.CreateDirectory(root);File.WriteAllText(Path.Combine(root,"startup-error.json"),new JavaScriptSerializer().Serialize(new{State="NeedsAttention",Message=ex.GetType().Name+": "+ex.Message,UpdatedUtc=DateTime.UtcNow.ToString("o")}));}catch{}if(!args.Contains("--background"))MessageBox.Show("NetCrate could not start. Your existing backup files have not been changed.\n\n"+ex.Message,"NetCrate",MessageBoxButton.OK,MessageBoxImage.Warning);}

@@ -25,6 +25,7 @@ namespace NetCrate.Setup
         private CancellationTokenSource checkCancellation;
         private bool closeAfterCheck;
         private readonly BitmapSource logo;
+        public bool SetupCompleted { get; private set; }
         private CancellationToken CheckToken { get { return checkCancellation == null ? CancellationToken.None : checkCancellation.Token; } }
 
         public SetupView(SetupController controller)
@@ -360,7 +361,7 @@ namespace NetCrate.Setup
             prepare.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(prepare);
             Expander details = new Expander { Header = "Software details", Foreground = Theme.Brush(Theme.Muted), Margin = new Thickness(0, 16, 0, 0),
-                Content = Text("PowerShell runs tasks. Restic encrypts backups. The Backup Server also needs FFmpeg, Python and Pillow for proxies and contact sheets. Installation uses pinned Windows Package Manager entries with installer hash checks. Read THIRD-PARTY.md for license information. This development build does not yet install the worker's Python runtime automatically.", 12, Theme.Muted) };
+                Content = Text("NetCrate installs its tools for your Windows account and verifies each download. Restic encrypts backups. FFmpeg creates proxies. Python and Pillow create contact sheets. Tasks resume when you sign in to Windows. Read THIRD-PARTY.md for software licenses.", 12, Theme.Muted) };
             panel.Children.Add(details);
             if (controller.State.Role == ComputerRole.BackupServer && controller.State.Prepared)
             {
@@ -393,16 +394,64 @@ namespace NetCrate.Setup
 
         private void ConnectScreen(StackPanel panel)
         {
-            Heading(panel, "Connect your computers", "Both computers need to be on the same private network. Open NetCrate on your other computer and choose its role there too.");
+            bool editing = controller.State.Role == ComputerRole.EditingComputer;
+            Heading(panel, "Connect your computers", "Both computers need a private connection. Use NetBird, or choose an existing connection below.");
             FlowDiagram(panel);
-            Button guide = Button("Open private network guide", () => Process.Start(new ProcessStartInfo("https://docs.netbird.io/get-started/install/windows") { UseShellExecute = true }), false);
-            guide.Margin = new Thickness(0, 20, 0, 10);
-            panel.Children.Add(guide);
-            panel.Children.Add(Text("Computer pairing is still being built. This development version can check software, but cannot connect a backup repository yet.", 14, Theme.Warning));
+            panel.Children.Add(Button("Open NetBird", async () => await RunSafeAsync(() => controller.NetworkAsync(CheckToken)), false));
+            StackPanel existing = new StackPanel();
+            existing.Children.Add(Text("Use an existing WireGuard connection, another VPN, or a local network. Enter this computer's private IPv4 address. Leave it blank to use NetBird automatically.", 12, Theme.Muted));
+            TextBox address = new TextBox { Text = controller.State.NetworkAddress ?? "", Background = Theme.Brush(Theme.Surface), Foreground = Theme.Brush(Theme.Text),
+                BorderBrush = Theme.Brush(Theme.Border), Padding = new Thickness(10), Margin = new Thickness(0, 10, 0, 8) };
+            AutomationProperties.SetName(address, "This computer's private IPv4 address");
+            existing.Children.Add(address);
+            existing.Children.Add(Button("Use this connection", () =>
+            {
+                try { controller.UseNetworkAddress(address.Text.Trim()); }
+                catch (InvalidOperationException error) { MessageBox.Show(this, error.Message, "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
+                catch (IOException) { ShowSaveError(); }
+                catch (UnauthorizedAccessException) { ShowSaveError(); }
+            }, false));
+            panel.Children.Add(new Expander { Header = "Use an existing private connection", Content = existing,
+                Foreground = Theme.Brush(Theme.Muted), Margin = new Thickness(0, 12, 0, 0) });
+            TextBlock instruction = Text(editing
+                ? "1. Save a connection file and send it to the Backup Server.\n2. On the Backup Server, open it, compare the device codes, then save a reply.\n3. Open that reply here and compare the connection codes."
+                : "1. Open the connection file from the Editing Computer.\n2. Compare the device code with the Editing Computer, then choose Codes match. Windows will ask to allow this private connection.\n3. Save a reply and send it back to the Editing Computer.", 13, Theme.Muted);
+            instruction.Margin = new Thickness(0, 18, 0, 12);
+            panel.Children.Add(instruction);
+            if (editing) panel.Children.Add(Button("Save connection file", ExportConnection, false));
+            panel.Children.Add(Button(editing ? "Open reply file" : "Open connection file", ImportConnection, false));
+            if (!String.IsNullOrEmpty(controller.PairingCode))
+            {
+                TextBox code = new TextBox { Text = controller.PairingCode, IsReadOnly = true, FontSize = 22,
+                    FontFamily = new FontFamily("Consolas"), Background = Theme.Brush(Theme.Surface), Foreground = Theme.Brush(Theme.Accent),
+                    BorderBrush = Theme.Brush(Theme.Border), Padding = new Thickness(14), Margin = new Thickness(0, 14, 0, 10) };
+                AutomationProperties.SetName(code, "Code to compare with the other computer");
+                panel.Children.Add(code);
+                if (controller.PairingStage == "RequestImported" || controller.PairingStage == "ReplyImported")
+                    panel.Children.Add(Button("Codes match", async () => await RunSafeAsync(() => controller.ConfirmConnectionAsync(controller.PairingCode, CheckToken)), true));
+            }
+            if (!editing && (controller.PairingStage == "RequestConfirmed" || controller.PairingStage == "ReplySaved"))
+                panel.Children.Add(Button("Save reply file", ExportConnection, true));
             Button check = Button("Check connection", async () => await RunSafeAsync(() => controller.CheckConnectionAsync(CheckToken)), true);
             check.HorizontalAlignment = HorizontalAlignment.Left;
             check.Margin = new Thickness(0, 20, 0, 0);
             panel.Children.Add(check);
+        }
+
+        private async void ExportConnection()
+        {
+            bool editing = controller.State.Role == ComputerRole.EditingComputer;
+            SaveFileDialog picker = new SaveFileDialog { Title = editing ? "Save connection file" : "Save reply file",
+                FileName = editing ? "NetCrate connection" : "NetCrate reply", DefaultExt = ".netcrate", Filter = "NetCrate connection|*.netcrate" };
+            if (picker.ShowDialog(this) == true)
+                await RunSafeAsync(() => controller.ExportConnectionAsync(picker.FileName, CheckToken));
+        }
+
+        private async void ImportConnection()
+        {
+            OpenFileDialog picker = new OpenFileDialog { Title = "Open the file from your other computer", Filter = "NetCrate connection|*.netcrate", Multiselect = false };
+            if (picker.ShowDialog(this) == true)
+                await RunSafeAsync(() => controller.ImportConnectionAsync(picker.FileName, CheckToken));
         }
 
         private void CheckScreen(StackPanel panel)
@@ -410,12 +459,20 @@ namespace NetCrate.Setup
             Heading(panel, "Check the round trip", controller.State.Role == ComputerRole.EditingComputer
                 ? "A short generated sample will travel to the Backup Server. Its returned proxy must pass local verification."
                 : "The Editing Computer starts the sample check. Keep this computer on while it runs.");
-            panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CheckToken)), true));
+            if (controller.State.Role == ComputerRole.EditingComputer)
+                panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CheckToken)), true));
         }
 
         private void CompleteScreen(StackPanel panel)
         {
-            Heading(panel, "Your computers are ready", "The sample proxy returned and passed verification. You can now choose a project to back up.");
+            Heading(panel, controller.State.Role == ComputerRole.EditingComputer ? "Your computers are ready" : "The Backup Server is ready",
+                controller.State.Role == ComputerRole.EditingComputer ? "The sample proxy returned and passed verification. You can now choose a project to back up."
+                : "Run the sample check on the Editing Computer. Keep this computer on and signed in while backups and proxies run.");
+            panel.Children.Add(Button("Open NetCrate", async () => await RunSafeAsync(async () =>
+            {
+                await controller.FinishAsync(CheckToken);
+                if (controller.LastResult.Succeeded) { SetupCompleted = true; Close(); }
+            }), true));
         }
 
         private void BuildFooter(Grid main)
@@ -449,6 +506,7 @@ namespace NetCrate.Setup
                 FocusFirst();
             }), true);
             next.IsEnabled = controller.CanContinue;
+            if (controller.State.Step == SetupStep.Complete) next.Visibility = Visibility.Collapsed;
             next.MinWidth = 128;
             next.IsDefault = controller.State.Step != SetupStep.Computer;
             Grid.SetColumn(next, 1);
