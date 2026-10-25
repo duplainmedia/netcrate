@@ -7,15 +7,18 @@ function Set-NetCratePrivateDirectory {
     param([Parameter(Mandatory)][string]$LiteralPath)
     $path = Assert-NetCrateLocalPath $LiteralPath
     $null = [IO.Directory]::CreateDirectory($path)
+    $directory = [IO.DirectoryInfo]::new($path)
     $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
     $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
     $acl = [Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetOwner($owner)
+    $existingOwner = [IO.FileSystemAclExtensions]::GetAccessControl($directory).GetOwner([Security.Principal.SecurityIdentifier])
+    # Avoid requesting ownership rights when this account already owns the folder.
+    if ($existingOwner.Value -cne $owner.Value) { $acl.SetOwner($owner) }
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($sid in @($owner, $system)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
     }
-    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl)
+    [IO.FileSystemAclExtensions]::SetAccessControl($directory, $acl)
     return $path
 }
 
