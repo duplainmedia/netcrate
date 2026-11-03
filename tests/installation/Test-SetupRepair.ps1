@@ -80,4 +80,20 @@ Check 'accepted media failure updates only media state' {
     $status=Read-NetCrateJson $path
     Assert ($status.MediaState -ceq 'NeedsAttention' -and $status.SnapshotId -ceq $snapshot -and ([DateTimeOffset]$status.BackupCompletedUtc).UtcDateTime -eq ([DateTimeOffset]$completed).UtcDateTime) 'Media failure did not retain the successful original and update media state.'
 }
+Check 'repaired verified media clears stale attention without rewriting stable queue' {
+    $id='7'*64;$snapshot='6'*64;$completed='2026-11-02T20:00:00Z';$path="$root/Queue/media-repaired.json"
+    Write-NetCrateJson $path @{Version=1;Id='media-repaired';Project=(Join-Path $TestRoot 'Projects/A');BackupMode='Media';SnapshotId=$snapshot;BackupCompletedUtc=$completed;MediaState='Ready';State='Ready';RequestId=$id;UpdatedUtc=$completed}
+    Write-NetCrateJson "$root/Receipts/$id.json" @{State='NeedsAttention'}
+    Write-NetCrateJson "$root/JobProgress/$id.json" @{SnapshotId=$snapshot;State='NeedsAttention'}
+    Update-NetCrateQueue $root ([pscustomobject]@{})
+    Assert ((Read-NetCrateJson $path).MediaState -ceq 'NeedsAttention') 'Missing delivered media was not marked unavailable.'
+    Write-NetCrateJson "$root/Receipts/$id.json" @{State='Ready'}
+    Update-NetCrateQueue $root ([pscustomobject]@{})
+    $repaired=Read-NetCrateJson $path
+    Assert ($repaired.State -ceq 'Ready' -and $repaired.MediaState -ceq 'Ready' -and $repaired.SnapshotId -ceq $snapshot) 'Verified repaired files stayed in attention or stale progress overrode them.'
+    $sentinel=[DateTime]::new(2026,1,1,0,0,0,[DateTimeKind]::Utc)
+    [IO.File]::SetLastWriteTimeUtc($path,$sentinel);$before=[IO.File]::ReadAllText($path)
+    Update-NetCrateQueue $root ([pscustomobject]@{})
+    Assert ([IO.File]::GetLastWriteTimeUtc($path) -eq $sentinel -and [IO.File]::ReadAllText($path) -ceq $before) 'Unchanged media state rewrote the queue.'
+}
 if ($failures.Count) { $failures | Write-Output; exit 1 }

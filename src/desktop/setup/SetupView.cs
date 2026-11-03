@@ -334,7 +334,7 @@ namespace NetCrate.Setup
 
         private RadioButton ModeChoice(string mode, string label)
         {
-            RadioButton choice = new RadioButton { Content = label, GroupName = "BackupMode", IsChecked = controller.State.BackupMode == mode,
+            RadioButton choice = new RadioButton { Content = (controller.State.BackupMode == mode ? "\u25CF  " : "\u25CB  ") + label, GroupName = "BackupMode", IsChecked = controller.State.BackupMode == mode,
                 IsEnabled = !controller.Busy, Margin = new Thickness(0, 0, 0, 12), Padding = new Thickness(8), Foreground = Theme.Brush(Theme.Text) };
             AutomationProperties.SetName(choice, label);
             choice.Checked += delegate { if (controller.State.BackupMode != mode) controller.ChooseBackupMode(mode); };

@@ -9,7 +9,8 @@ using NetCrate;
 class GuidedModelTests {
  static JavaScriptSerializer json=new JavaScriptSerializer();
  static void Put(string path,object value){Directory.CreateDirectory(Path.GetDirectoryName(path));File.WriteAllText(path,json.Serialize(value));}
- static void Assert(bool value,string message){if(!value)throw new Exception(message);}
+ static int assertions;
+ static void Assert(bool value,string message){if(!value)throw new Exception(message);assertions++;}
  public static void Main(string[] args){
   string root=Path.GetFullPath(args[0]),state=Path.Combine(root,"Editing"),projects=Path.Combine(root,"Projects"),project=Path.Combine(projects,"First project");
   Settings settings=Settings.FromRoots(projects,state);settings.SourceComputer="EDITING";settings.WorkerComputer="BACKUP";
@@ -33,17 +34,15 @@ class GuidedModelTests {
   association["WorkerComputer"]="BACKUP";Put(receiptPath,receipt);string completeBefore=File.ReadAllText(Path.Combine(destination,"COMPLETE.json"));File.AppendAllText(Path.Combine(destination,"COMPLETE.json")," ");
   Assert(new JobReader(settings).Read().Jobs.Single().Phase!="Proxies ready","Changed completion metadata claimed readiness.");
   File.WriteAllText(Path.Combine(destination,"COMPLETE.json"),completeBefore);
-  int failures=0;
   File.Delete(proxy);Job missing=new JobReader(settings).Read().Jobs.Single();
-  if(missing.Phase=="Proxies ready"||!missing.Attention){Console.WriteLine("FAIL: removed media still reported ready");failures++;}
+  Assert(missing.Phase!="Proxies ready"&&missing.Attention,"Removed media still reported ready.");
   File.WriteAllText(proxy,"proxy");
   Put(Path.Combine(state,"Queue","new.json"),new{Project=project,State="NeedsAttention",Sample=false,SnapshotId="",RequestId="",Id="new",CreatedUtc=DateTime.UtcNow.AddSeconds(1).ToString("o"),UpdatedUtc=DateTime.UtcNow.ToString("o")});
   Job pending=new JobReader(settings).Read().Jobs.Single();
-  if(pending.ResultFolder!=destination||!pending.Attention){Console.WriteLine("FAIL: later failed backup hid previous verified proxies");failures++;}
+  Assert(pending.ResultFolder==destination&&pending.Attention,"Later failed backup hid previous verified proxies.");
   using(System.Diagnostics.Process self=System.Diagnostics.Process.GetCurrentProcess())
    Put(Path.Combine(state,"runtime-status.json"),new{State="Running",ProcessId=self.Id,ProcessStartedUtc=self.StartTime.ToUniversalTime().ToString("o"),UpdatedUtc=DateTime.UtcNow.AddHours(-1).ToString("o")});
-  if(new JobReader(settings).Read().ServiceAttention){Console.WriteLine("FAIL: live long job reported connection failure");failures++;}
-  Assert(failures==0,"Guided monitor repair regressions failed.");
+  Assert(!new JobReader(settings).Read().ServiceAttention,"Live long job reported connection failure.");
   string ordinary=Path.Combine(projects,"Documents","November");
   Put(Path.Combine(state,"Queue","ordinary.json"),new{Project=ordinary,BackupMode="Folder",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="Off",State="Ready",Sample=false,SnapshotId=new string('e',64),RequestId="",Id="ordinary",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
   Job folder=new JobReader(settings).Read().Jobs.SingleOrDefault(j=>j.ProjectPath==ordinary);
@@ -54,7 +53,7 @@ class GuidedModelTests {
   Put(Path.Combine(state,"Queue","media-failure.json"),new{Project=mediaFailure,BackupMode="Media",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="NeedsAttention",State="NeedsAttention",Sample=false,SnapshotId=new string('9',64),RequestId="",Id="media-failure",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
   Job mediaJob=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==mediaFailure);
   Assert(mediaJob.BackupCompleted&&mediaJob.BackupCompletedUtc==new DateTime(2026,11,2,20,0,0,DateTimeKind.Utc)&&mediaJob.MediaState=="NeedsAttention","Offline media publication hid a successful original backup.");
-  Console.WriteLine("PASS: 7 guided backup monitor assertions.");
+  Console.WriteLine("PASS: "+assertions+" guided backup monitor assertions.");
  }
  static string Hash(string path){using(SHA256 hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path))).Replace("-","").ToLowerInvariant();}
 }

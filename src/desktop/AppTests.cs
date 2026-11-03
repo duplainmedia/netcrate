@@ -14,6 +14,20 @@ class AppTests {
   foreach(string p in new[]{s.BackupRecords,s.RunsRoot,s.Outbox,s.SourceState,s.ReceiverState,s.ActiveRoot,s.OutputRoot})Directory.CreateDirectory(p);
   string project="2026-10-23_Example",source=new string('a',64),result=new string('b',64),requestId=new string('c',64),projectPath=Path.Combine(s.ActiveRoot,project);
   Directory.CreateDirectory(projectPath);
+  string grandchild=Path.Combine(projectPath,"Nested"),sibling=s.ActiveRoot+" sibling",linked=Path.Combine(s.ActiveRoot,"Linked");
+  Directory.CreateDirectory(grandchild);Directory.CreateDirectory(sibling);
+  var junctionStart=new System.Diagnostics.ProcessStartInfo("cmd.exe","/c mklink /J \""+linked+"\" \""+projectPath+"\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+  using(var junction=System.Diagnostics.Process.Start(junctionStart)){junction.WaitForExit();if(junction.ExitCode!=0)throw new Exception("Junction fixture creation failed.");}
+  try {
+   foreach(string mode in new[]{"Folder","Media"}) {
+    s.BackupMode=mode;
+    Assert(SafeFolders.CanSelectBackup(s.ActiveRoot,s)==(mode=="Folder"),mode+" picker root selection differs from scope.");
+    Assert(SafeFolders.CanSelectBackup(projectPath,s),mode+" picker rejected a direct child.");
+    Assert(SafeFolders.CanSelectBackup(grandchild,s)==(mode=="Folder"),mode+" picker grandchild selection differs from scope.");
+    Assert(!SafeFolders.CanSelectBackup(sibling,s),mode+" picker accepted a sibling prefix.");
+    Assert(!SafeFolders.CanSelectBackup(linked,s),mode+" picker accepted a junction.");
+   }
+  } finally {Directory.Delete(linked);s.BackupMode="Media";}
   Put(Path.Combine(s.BackupRecords,project+".backup-result.json"),new{Status="Verified",Source=projectPath,SnapshotId=source,VerifiedUtc="2026-10-24T12:00:00Z",VerifiedFileCount=2,VerifiedBytes=1000});
   JobReader reader=new JobReader(s);Dashboard d=reader.Read();Assert(d.Jobs.Count==1&&d.Jobs[0].Phase=="Backup verified","Verified original backup was not displayed.");
   s.ProgressState=Path.Combine(root,"progress-state");Directory.CreateDirectory(Path.Combine(s.ProgressState,"Jobs"));

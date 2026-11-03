@@ -58,10 +58,20 @@ function Invoke-NetCrateQueue {
             if ($mode -ceq 'Folder') {
                 $status = Invoke-NetCrateOriginals $Root $Settings $status.Project $file Folder
                 if ($status.Sample) {
-                    $restore = [IO.Path]::Combine($Root, 'SampleVerification', [guid]::NewGuid().ToString('N'))
-                    $null = Invoke-WorkflowRestic $Root $Settings Primary @('restore', ($status.SnapshotId + ':' + (Get-NetCrateSnapshotRoot $status.Project)), '--target', $restore, '--verify')
-                    $expected = [Text.UTF8Encoding]::new($false).GetBytes("NetCrate folder backup sample`r`nKnown original bytes: 0123456789 日本語`r`n")
-                    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes([IO.Path]::Combine($restore, 'sample.txt'))) -cne [Convert]::ToBase64String($expected)) { throw 'The sample restore differs from its known original bytes.' }
+                    $verificationRoot = Assert-NetCrateLocalPath ([IO.Path]::Combine($Root, 'SampleVerification'))
+                    $restore = [IO.Path]::Combine($verificationRoot, [guid]::NewGuid().ToString('N'))
+                    try {
+                        $null = [IO.Directory]::CreateDirectory($restore)
+                        $null = Invoke-WorkflowRestic $Root $Settings Primary @('restore', ($status.SnapshotId + ':' + (Get-NetCrateSnapshotRoot $status.Project)), '--include', '/sample.txt', '--target', $restore, '--verify')
+                        $expected = [Text.UTF8Encoding]::new($false).GetBytes("NetCrate folder backup sample`r`nKnown original bytes: 0123456789 日本語`r`n")
+                        if ([Convert]::ToBase64String([IO.File]::ReadAllBytes([IO.Path]::Combine($restore, 'sample.txt'))) -cne [Convert]::ToBase64String($expected)) { throw 'The sample restore differs from its known original bytes.' }
+                    } finally {
+                        if ([IO.Directory]::Exists($restore)) {
+                            $resolved = Assert-NetCrateLocalPath $restore
+                            if ([IO.Path]::GetDirectoryName($resolved) -cne $verificationRoot -or [IO.Path]::GetFileName($resolved) -cnotmatch '^[a-f0-9]{32}$') { throw 'The disposable sample restore is outside its verification folder.' }
+                            [IO.Directory]::Delete($resolved, $true)
+                        }
+                    }
                 }
                 $status.State = 'Ready'; $status.MediaState = 'Off'; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
                 continue
@@ -84,16 +94,22 @@ function Update-NetCrateQueue {
         $status = Read-NetCrateJson $file
         if ((Get-NetCrateBackupMode $status) -ceq 'Folder') { continue }
         $receipt = if ($status.RequestId -cmatch '^[a-f0-9]{64}$') { Get-NetCrateReceipt $Root $status.RequestId } else { $null }
-        if ($receipt -and $receipt.State -ceq 'Ready' -and $status.State -cne 'Ready') {
-            $status | Add-Member -NotePropertyName MediaState -NotePropertyValue 'Ready' -Force
-            $status.State = 'Ready'; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
+        $media = if ($status.PSObject.Properties.Name -contains 'MediaState') { $status.MediaState } else { '' }
+        $nextState = $status.State; $nextMedia = $media
+        if ($receipt -and $receipt.State -ceq 'Ready') {
+            # Verified local delivery takes precedence over stale worker progress.
+            $nextState = 'Ready'; $nextMedia = 'Ready'
         } elseif ($status.RequestId -cmatch '^[a-f0-9]{64}$') {
             $progressFile = [IO.Path]::Combine($Root, 'JobProgress', $status.RequestId + '.json')
             $progress = if ([IO.File]::Exists($progressFile)) { Read-NetCrateJson $progressFile } else { $null }
             if (($receipt -and $receipt.State -ceq 'NeedsAttention') -or ($progress -and $progress.SnapshotId -ceq $status.SnapshotId -and $progress.State -ceq 'NeedsAttention')) {
-                $status | Add-Member -NotePropertyName MediaState -NotePropertyValue 'NeedsAttention' -Force
-                $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
+                $nextMedia = 'NeedsAttention'
             }
+        }
+        if ($nextState -cne $status.State -or $nextMedia -cne $media) {
+            $status.State = $nextState
+            $status | Add-Member -NotePropertyName MediaState -NotePropertyValue $nextMedia -Force
+            $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
         }
     }
 }

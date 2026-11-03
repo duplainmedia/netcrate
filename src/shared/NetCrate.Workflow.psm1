@@ -84,6 +84,11 @@ function Get-WorkflowNodes($Root, $Settings, [string]$SnapshotId, [string]$Proje
 
 function Assert-WorkflowTree([string]$Path) {
     $null = Assert-NetCrateLocalPath $Path
+    $part = [IO.Path]::GetFullPath($Path)
+    while ($part) {
+        if (([IO.File]::GetAttributes($part) -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { throw 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
+        $part = [IO.Path]::GetDirectoryName($part.TrimEnd('\'))
+    }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $pending = [Collections.Generic.Stack[string]]::new(); $pending.Push($Path)
     while ($pending.Count) {
@@ -125,6 +130,16 @@ function Write-NetCrateBackupReceipt($Root, $Settings, $Completion) {
     if (-not $existing.Count) { $null = Backup-WorkflowPath $Root $Settings Primary $path backup-receipt @('--tag', $tag) }
 }
 
+function Get-WorkflowOriginalTime($Root, $Settings, [string]$SnapshotId, [string]$Project, [string]$BackupMode) {
+    $config = Invoke-WorkflowRestic $Root $Settings Primary @('cat', 'config') | ConvertFrom-Json
+    if ($config.id -cne $Settings.Repositories.Primary.Id) { throw 'The original repository identity differs from this checkpoint.' }
+    $snapshot = Invoke-WorkflowRestic $Root $Settings Primary @('cat', 'snapshot', $SnapshotId) | ConvertFrom-Json
+    $tag = if ($BackupMode -ceq 'Folder') { 'netcrate-folder-originals' } else { 'netcrate-originals' }
+    if ($snapshot.hostname -cne $Settings.SourceComputer -or @($snapshot.paths).Count -ne 1 -or $snapshot.tags -cnotcontains $tag -or
+        -not (Convert-WorkflowSnapshotPath $snapshot.paths[0]).Equals((Get-NetCrateSnapshotRoot $Project), [StringComparison]::OrdinalIgnoreCase)) { throw 'The original snapshot does not match this source and folder.' }
+    return ([DateTimeOffset]$snapshot.time).UtcDateTime.ToString('o')
+}
+
 function Invoke-NetCrateOriginals {
     param([string]$Root, $Settings, [string]$Project, [string]$Checkpoint, [ValidateSet('Folder','Media')][string]$BackupMode)
     $path = Get-NetCrateBackupPath $Settings $Project $BackupMode
@@ -143,7 +158,10 @@ function Invoke-NetCrateOriginals {
         $status.BackupCompletedUtc = [DateTime]::UtcNow.ToString('o')
         if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
     }
-    if (-not $status.BackupCompletedUtc) { $status.BackupCompletedUtc = [DateTime]::UtcNow.ToString('o'); if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status } }
+    if (-not $status.BackupCompletedUtc) {
+        $status.BackupCompletedUtc = Get-WorkflowOriginalTime $Root $Settings $status.SnapshotId $path $BackupMode
+        if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
+    }
     Write-NetCrateBackupReceipt $Root $Settings $status
     return $status
 }

@@ -50,8 +50,17 @@ $status.State='Queued'; Write-NetCrateJson $queue $status; Invoke-NetCrateQueue 
 Assert (@(Invoke-WorkflowRestic $source $settings Primary @('snapshots','--json','--tag','netcrate-backup-receipt') | ConvertFrom-Json).Count -eq 1) 'Retry duplicated its receipt.'
 $sample=Add-NetCrateBackupQueue $source $settings -Sample; Invoke-NetCrateQueue $source $settings
 Assert ((Read-NetCrateJson $sample).State -ceq 'Ready') 'The ordinary generated sample did not pass restored-byte verification.'
+Assert (@([IO.Directory]::EnumerateDirectories("$source/SampleVerification")).Count -eq 0) 'Successful sample verification left its disposable restore behind.'
+$failedSample=Add-NetCrateBackupQueue $source $settings "$active/Notes";$failedStatus=Read-NetCrateJson $failedSample;$failedStatus.Sample=$true;Write-NetCrateJson $failedSample $failedStatus
+Invoke-NetCrateQueue $source $settings
+Assert ((Read-NetCrateJson $failedSample).State -ceq 'NeedsAttention' -and @([IO.Directory]::EnumerateDirectories("$source/SampleVerification")).Count -eq 0) 'Failed sample verification left its disposable restore behind.'
 $rootQueue=Add-NetCrateBackupQueue $source $settings $active; Invoke-NetCrateQueue $source $settings
 Assert ((Read-NetCrateJson $rootQueue).State -ceq 'Ready') 'Folder mode rejected backing up the configured root itself.'
+[IO.File]::SetAttributes($active,([IO.File]::GetAttributes($active) -bor [IO.FileAttributes]::Offline))
+try { Reject { Assert-WorkflowTree $active } } finally { [IO.File]::SetAttributes($active,[IO.FileAttributes]::Directory) }
+$offlineAncestor="$TestRoot/OfflineAncestor";$null=New-Item -ItemType Directory -Path "$offlineAncestor/Selected"
+[IO.File]::SetAttributes($offlineAncestor,([IO.File]::GetAttributes($offlineAncestor) -bor [IO.FileAttributes]::Offline))
+try { Reject { Assert-WorkflowTree "$offlineAncestor/Selected" } } finally { [IO.File]::SetAttributes($offlineAncestor,[IO.FileAttributes]::Directory) }
 Reject { Add-NetCrateBackupQueue $source $settings ($active+' sibling') }
 $link="$active/Linked"; $null=New-Item -ItemType Junction -Path $link -Target "$active/Notes"
 Reject { Add-NetCrateBackupQueue $source $settings $link }

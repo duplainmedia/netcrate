@@ -42,6 +42,8 @@ class SetupViewTests
         peer=UIElementAutomationPeer.CreatePeerForElement(media);
         ((ISelectionItemProvider)peer.GetPattern(PatternInterface.SelectionItem)).Select();
         Assert(controller.State.BackupMode=="Media","Clicking media capability did not change the setup request.");
+        modes=Find<RadioButton>(view);
+        Assert(Convert.ToString(modes.Find(r=>r.IsChecked==true).Content).StartsWith("\u25CF"),"The chosen backup mode has no explicit visible selection indicator.");
         view.Close();
         app.Shutdown();
         Console.WriteLine("PASS: " + assertions + " native role accessibility assertions.");
