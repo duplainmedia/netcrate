@@ -1,0 +1,10 @@
+.superpowers/
+build/
+*.exe
+*.exe.config
+*.ico
+__pycache__/
+*.pyc
+src/desktop/Assets/NetCrate-AppIcon.png
+test-temp*/
+/.t/

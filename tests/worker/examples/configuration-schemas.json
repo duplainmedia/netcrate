@@ -1,0 +1,6 @@
+{
+  "notice": "SCHEMA ONLY: fictional values require coordinated configuration, fresh disk identity and real TLS setup.",
+  "tools.json": {"Python": "C:\\ProgramData\\NetCrate\\Office\\Tools\\Python\\python.exe", "Scripts": "C:\\ProgramData\\NetCrate\\Office\\Tools"},
+  "auto-config.json": {"Enabled": false, "AcceptAfterUtc": "2025-01-15T00:00:00Z"},
+  "endpoint config.json": {"DiskSerial": "REQUIRED-ACTUAL-EXPECTED-VOLUME-IDENTITY", "VolumePath": "E:\\", "RepositoryPath": "E:\\NetCrate\\Repositories", "ListenAddress": "backup.example:8000", "ServerExe": "C:\\Program Files\\NetCrate\\Backup\\rest-server.exe", "SourceAddress": "REQUIRED-PRIVATE-SOURCE-ADDRESS"}
+}

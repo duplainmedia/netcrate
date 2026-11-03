@@ -1,0 +1,16 @@
+{
+  "Fingerprint": "8441ba8cb8d3624b027b42b7460de5bc3257728a283694f6600bc67579b35528",
+  "Clips": 1,
+  "Bytes": 41,
+  "Files": [
+    {
+      "RelativePath": "Camera/clip.mov",
+      "SnapshotPath": "/D/Projects/sample-project/Camera/clip.mov",
+      "Bytes": 41,
+      "Content": [
+        "20963e930527d671ea1f2eff4aec4eb7ba27a9c52a22d243c26bd0582d5c8807"
+      ]
+    }
+  ],
+  "Recipe": "half-prores-v2|ffmpeg9.0.1|scale=iw/2:ih/2|prores_ks:profile0:422p10|fps-passthrough|pcm24|source-metadata|12-stills:1232x1176:no-lut"
+}

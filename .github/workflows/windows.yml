@@ -1,0 +1,41 @@
+name: Windows checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build and check desktop
+        shell: pwsh
+        run: ./src/desktop/Build.ps1 -TestRoot $env:RUNNER_TEMP
+      - name: Check shared contracts and private state
+        shell: pwsh
+        run: |
+          ./tests/configuration/Test-Configuration.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Configuration"
+          ./tests/protocol/Test-Protocol.ps1
+          ./tests/pairing/Test-Pairing.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Pairing"
+          ./tests/installation/Test-Dependencies.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Dependencies"
+          ./tests/installation/Test-SetupRepair.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Repair"
+      - name: Package application
+        shell: pwsh
+        run: ./install/Build-Package.ps1
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: NetCrate-Windows-x64
+          path: build/NetCrate-Windows-x64.zip
+  media:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Acquire verified private tools and check the complete workflow
+        shell: pwsh
+        run: |
+          Import-Module ./install/NetCrate.Dependencies.psm1
+          $tools = Install-NetCrateTools Worker "$env:RUNNER_TEMP/NetCrate-Tools"
+          ./tests/installation/Test-Workflow.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Workflow" -ResticExe $tools.Restic -PythonExe $tools.Python -FFmpegExe $tools.FFmpeg -RestServerExe $tools.RestServer
