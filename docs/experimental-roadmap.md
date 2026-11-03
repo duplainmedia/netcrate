@@ -15,9 +15,17 @@ Focused native tests and scoped reviews cover these fixes. The issues close when
 
 The [preservation documentation](https://github.com/duplainmedia/netcrate/issues/8) was corrected previously. The [changelog](../CHANGELOG.md) records user-facing changes; [the original review](reviews/2026-11-03-everyday-backups.md) remains historical evidence.
 
-## Remaining work
+## Addressed in 0.1.2 development
 
-[Maintenance history saturation](https://github.com/duplainmedia/netcrate/issues/10) is a non-blocking follow-up. After 256 retained failures, even attempts that never began deletion can prevent new maintenance requests. Safe history retirement needs regression coverage while preserving ambiguous and unfinished destructive operations.
+[Maintenance history saturation](https://github.com/duplainmedia/netcrate/issues/10) is fixed by retiring safe terminal records before admitting another request. Active operations, ambiguous forget, unfinished cleanup and unknown stages remain protected.
+
+[Focused verification](verification-0.1.2.md) covers history admission, journal preservation, native cleanup, the desktop build and versioned packaging.
+
+## Addressed in 0.1.3 development
+
+[Recovery bootstrap extraction](https://github.com/duplainmedia/netcrate/issues/13) uses validated extended paths for Windows PowerShell 5.1 file I/O. [Focused verification](verification-0.1.3.md) covers short/long roots, the actual recovery bridge, archive checks, link rejection and private permissions.
+
+## Remaining work
 
 [Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
 

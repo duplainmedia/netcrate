@@ -28,8 +28,10 @@ jobs:
           ./tests/protocol/Test-Protocol.ps1
           ./tests/pairing/Test-Pairing.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Pairing"
           ./tests/installation/Test-Dependencies.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Dependencies"
+          ./tests/installation/Test-DependencyPaths.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-DependencyPaths"
           ./tests/installation/Test-SetupRepair.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Repair"
           ./tests/installation/Test-SourceMutex.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SourceMutex"
+          ./tests/installation/Test-MaintenanceHistory.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-History"
       - name: Package application
         shell: pwsh
         run: |

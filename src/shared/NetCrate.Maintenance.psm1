@@ -419,6 +419,21 @@ function Invoke-MaintenanceCheck($Context) {
     }
     return [pscustomobject]$health
 }
+function Test-MaintenanceHistoryRetirable($Record) {
+    $terminal = [string]::Equals($Record.State,'Succeeded',[StringComparison]::Ordinal) -or
+        [string]::Equals($Record.State,'Failed',[StringComparison]::Ordinal) -or
+        [string]::Equals($Record.State,'NeedsAttention',[StringComparison]::Ordinal)
+    if(-not $terminal){return $false}
+    if([string]::Equals($Record.Action,'CheckStorage',[StringComparison]::Ordinal) -or
+        [string]::Equals($Record.Action,'PreviewRetention',[StringComparison]::Ordinal)){return $true}
+    if(-not [string]::Equals($Record.Action,'ApplyRetention',[StringComparison]::Ordinal)){return $false}
+    # Version 1 journals persist Confirmed before effects, each destructive stage
+    # before its native call, and Completed only after verified completion.
+    if($Record.PSObject.Properties.Name -notcontains 'Step'){return $true}
+    if($Record.Step -isnot [string]){return $false}
+    return [string]::Equals($Record.Step,'Confirmed',[StringComparison]::Ordinal) -or
+        [string]::Equals($Record.Step,'Completed',[StringComparison]::Ordinal)
+}
 function Invoke-NetCrateMaintenanceRequest {
     param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$InstallationId,
         [Parameter(Mandatory)][ValidateSet('CheckStorage','PreviewRetention','ApplyRetention')][string]$Action,
@@ -453,7 +468,7 @@ function Invoke-NetCrateMaintenanceRequest {
             $terminal=@(@(foreach($file in $existing){
                 $item=Read-NetCrateJson $file -MaximumBytes 32768
                 if($item.Version -ne 1 -or $item.InstallationId -cne $InstallationId -or $item.OperationId -cnotmatch '^[a-f0-9]{32}$' -or [IO.Path]::GetFileNameWithoutExtension($file) -cne $item.OperationId){throw 'A storage operation record is invalid.'}
-                if($item.State -cin @('Succeeded','Failed','NeedsAttention') -and -not ($item.Action -ceq 'ApplyRetention' -and ($item.State -ceq 'NeedsAttention' -or ($item.State -ceq 'Failed' -and $item.PSObject.Properties.Name -ccontains 'Step' -and $item.Step -cin @('ForgetStarted','ForgetVerified','PruneStarted'))))){[pscustomobject]@{Path=$file;CreatedUtc=[DateTimeOffset]$item.CreatedUtc}}
+                if(Test-MaintenanceHistoryRetirable $item){[pscustomobject]@{Path=$file;CreatedUtc=[DateTimeOffset]$item.CreatedUtc}}
             })|Sort-Object CreatedUtc)
             $remove=$existing.Count-255
             if($terminal.Count -lt $remove){throw 'Too many storage requests are active. Wait for the Backup Server and try again.'}
