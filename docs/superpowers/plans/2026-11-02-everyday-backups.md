@@ -40,11 +40,11 @@
 
 ## Execution
 
-- [ ] **1. Establish baseline.** Follow [Task 1](task-1-baseline-brief.md). Read its report before attributing any failure to new work.
-- [ ] **2. Ship ordinary backup from setup through dashboard.** Follow [Task 2](task-2-brief.md). Publish final queue and receipt formats to dependent tasks.
-- [ ] **3. Restore selected originals with or without an existing profile.** Follow [Task 3](task-3-brief.md). Use installed or recovery-only credentials with the same selection and verification logic.
-- [ ] **4. Schedule and report backups.** Follow [Task 4](task-4-brief.md). Use Task 2's actual durable queue contract and preserve manual/media behavior.
-- [ ] **5. Expose health and limited retention.** Follow [Task 5](task-5-brief.md). Revalidate repository state and actual dependencies before any forget/prune.
+- [x] **1. Establish baseline.** Follow [Task 1](task-1-baseline-brief.md). Read its report before attributing any failure to new work.
+- [x] **2. Ship ordinary backup from setup through dashboard.** Follow [Task 2](task-2-brief.md). Publish final queue and receipt formats to dependent tasks.
+- [x] **3. Restore selected originals with or without an existing profile.** Follow [Task 3](task-3-brief.md). Use installed or recovery-only credentials with the same selection and verification logic.
+- [x] **4. Schedule and report backups.** Follow [Task 4](task-4-brief.md). Use Task 2's actual durable queue contract and preserve manual/media behavior.
+- [x] **5. Expose health and limited retention.** Follow [Task 5](task-5-brief.md). Revalidate repository state and actual dependencies before any forget/prune.
 - [ ] **Integrate.** Build and test the combined private package in this checkout. Verify that packaged actions, dependencies, WPF entry points, docs and stated capabilities match; record recovery SHA-256 and retained-snapshot evidence. Stage only intentional project changes if checkpointing. Leave deployment/publication and step 6 separate.
 
 Builders may begin independent modules and fixtures concurrently after the Task 2 contract is agreed. Serialize edits to WindowsSetupService, Invoke-SetupAction, runtime loop, Build.ps1 and WindowView, or give the controller an explicit integration handoff. Each task owns both its clickable workflow and behavioral tests.
