@@ -122,3 +122,16 @@ function Install-NetCrateTools {
 }
 
 Export-ModuleMember -Function Get-NetCrateDependencyCatalog, Get-NetCratePackageArchive, Expand-NetCrateDependency, Install-NetCrateTools
+
+function Install-NetCrateRecoveryTools {
+    param([Parameter(Mandatory)][string]$Root, [ValidateSet('PowerShell','Restic')][string[]]$Names=@('PowerShell','Restic'))
+    $tools=[ordered]@{}
+    foreach($package in (Get-NetCrateDependencyCatalog).Packages) {
+        if($package.Name -cnotin $Names){continue}
+        $archive=Get-NetCratePackageArchive $package ([IO.Path]::Combine($Root,'Downloads'))
+        $directory=Expand-NetCrateDependency $archive $package ([IO.Path]::Combine($Root,'Tools'))
+        $tools[$package.Name]=[IO.Path]::Combine($directory,$package.Executable.Replace('/','\'))
+    }
+    return [pscustomobject]$tools
+}
+Export-ModuleMember -Function Install-NetCrateRecoveryTools

@@ -38,8 +38,22 @@ If a computer or drive disconnects, reconnect it and leave NetCrate running. Int
 
 Linked paths, online-only or offline placeholders and folders overlapping NetCrate's application or backup storage are unsupported. Make cloud files fully local and choose a separate ordinary folder. Locked or unreadable files fail the backup and retry; a partial Restic snapshot is not reported as a completed backup. Existing installations without a saved mode keep their Media behavior. Repair requires their original folder and mode.
 
-## Recovery
+## Restore files
 
-The recovery file contains the passwords and identities of both Restic repositories. Keep it separate from the backup drive. It can unlock the repositories without the original Windows account. Passwords saved inside NetCrate itself are protected for the Windows account that completed setup.
+On the source dashboard, choose **Restore files**. Choose a dated backup, then double-click a folder (or press Enter) to browse its immediate contents. The breadcrumb returns to the whole backup or any parent folder. Select one file or folder, or leave nothing selected to restore the folder shown in the breadcrumb. **More** loads another page when needed.
 
-A full restore wizard and backup retention controls are not part of this build. Restic remains the independent recovery tool. Test recovery using a disposable backup before relying on a new installation.
+Choose **Restore to a new folder**, select an existing local parent folder, then review the source, backup date, selection and new folder name. NetCrate restores privately, verifies the file bytes and publishes a separate `Recovered-…` folder. Existing files are preserved; a name collision gets a new suffix. The completed screen shows the verified output location and **Open recovered folder**. Keep the window open during restoration; large restores can take a long time. If a drive disconnects or verification fails, reconnect it and retry. Nothing is merged into an existing folder.
+
+New backups appear only after their completion receipt is saved in the originals backup. An interrupted upload may need the source computer to retry before that date appears. Historical media backups without completion evidence are marked **Unknown (legacy)**; their original date and source folder come from the backup itself.
+
+## Recover on another computer or Windows account
+
+Keep a readable copy of the saved recovery file in secure offline storage, separate from the backup drive. It contains the keys that unlock your files. Its Windows permissions initially allow the exporting account only: before losing that account, make and verify a readable secure offline copy using an authorized storage or account-transfer method. A different account may need an authorized owner or administrator to grant access to that copy and to the attached backup drive. NetCrate does not change the original backup drive's permissions for you.
+
+You need the complete Windows x64 NetCrate build, the readable recovery file, the attached originals backup drive and enough free space in a separate local destination. Open NetCrate and, on the first setup screen before choosing a computer role, choose **Recover from a recovery file**. Choose the saved file and the drive's existing `originals` folder, normally inside `NetCrate-<installation id>\editing`. The drive letter may have changed. NetCrate verifies the backup identity against the saved recovery file; choosing a different backup or key fails without changing existing files.
+
+This opens the same dated file browser. Recovery does not require the original source folder, Windows profile, pairing, setup, NetBird or media tools. The first recovery can download and verify the pinned PowerShell and Restic tools, so allow internet access for those downloads. It does not prepare or install the backup runtime, register background tasks, or save recovery passwords in setup state. Recovery passwords stay in memory and the child tool's environment.
+
+Choose an ordinary fully available local destination outside the source, NetCrate state and backup storage. Links, special entries, unsupported Windows names and colliding names are refused. Files are recovered with private permissions for the recovering Windows account. Restoring a folder needs space for a private archive, the recovered tree and one file verification copy. Verification rereads each selected file, so large trees can take extra time. If Windows or the computer stops abruptly, an unpublished private `.netcrate-restore-…` folder may remain in the selected destination parent; existing output is preserved. Retry uses a new staging folder.
+
+Automated local recovery tests cover moved backup paths and an absent source tree. Recovery with a separate physical computer/account and independent sign-in/reboot remains a separate acceptance check. Test a disposable recovery before relying on a new installation.

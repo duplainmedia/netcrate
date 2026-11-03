@@ -17,6 +17,7 @@ class SetupViewTests
         Application app = new Application();
         SetupController controller = new SetupController(new WindowsSetupService(@"C:\No-Setup-Engine"), new MemoryStore());
         SetupView view = new SetupView(controller);
+        Assert(Find<Button>(view).Exists(b => AutomationProperties.GetName(b) == "Recover from a recovery file"), "Independent recovery is unreachable before setup.");
         List<RadioButton> roles = Find<RadioButton>(view);
         Assert(roles.Count == 2, "Computer choices do not expose radio selection semantics.");
         RadioButton editing = roles[0];

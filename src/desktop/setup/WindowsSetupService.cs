@@ -9,11 +9,11 @@ using System.Web.Script.Serialization;
 
 namespace NetCrate.Setup
 {
-    public sealed class WindowsSetupService : ISetupService
+    public sealed class WindowsSetupService : ISetupService, IRestoreService
     {
         private readonly string engineRoot;
         private readonly string setupRoot;
-        private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 131072 };
+        private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 1048576 };
 
         public WindowsSetupService(string engineRoot) : this(engineRoot,
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetCrate", "Setup")) { }
@@ -75,8 +75,11 @@ namespace NetCrate.Setup
             return await InvokePreparationAsync("Prepare", state, token);
         }
 
-        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null)
+        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null)
         {
+            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection" };
+            if (Array.IndexOf(actions, action) < 0) throw new ArgumentException("Unsupported action.");
+            token.ThrowIfCancellationRequested();
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
             if (!File.Exists(script))
                 return SetupResult.ActionRequired("installer-missing", "The setup files are missing. Download a complete NetCrate build and try again.");
@@ -84,7 +87,9 @@ namespace NetCrate.Setup
                 return SetupResult.ActionRequired("setup-folder-linked", "The NetCrate setup folder contains a link. Check the folder before trying again.");
             Directory.CreateDirectory(setupRoot);
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
-            File.WriteAllText(input, json.Serialize(new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }));
+            object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }
+                : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor };
+            File.WriteAllText(input, json.Serialize(payload), new UTF8Encoding(false));
             try
             {
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\WindowsPowerShell\v1.0\powershell.exe");
@@ -95,6 +100,8 @@ namespace NetCrate.Setup
                 start.RedirectStandardOutput = true;
                 start.RedirectStandardError = true;
                 start.StandardOutputEncoding = Encoding.UTF8;
+                // Each PowerShell host resolves its own bundled modules, even when launched from another host.
+                start.EnvironmentVariables.Remove("PSModulePath");
                 using (Process process = new Process { StartInfo = start })
                 {
                     process.Start();
@@ -102,7 +109,8 @@ namespace NetCrate.Setup
                     Task<string> errors = process.StandardError.ReadToEndAsync();
                     // Finish the package manager operation before allowing another attempt.
                     // Cancelling an installer process can leave its child installer running.
-                    if (action != "Prepare" && action != "Network" && action != "ConfirmConnection")
+                    // Recovery also waits through native verification/publication and owned staging cleanup.
+                    if (action != "Prepare" && action != "Network" && action != "ConfirmConnection" && action != "RestoreSelection")
                     {
                         bool finished = await InspectionProcess.WaitAsync(process, TimeSpan.FromSeconds(action == "CheckSample" ? 1250 : 90), token);
                         if (!finished)
@@ -111,7 +119,7 @@ namespace NetCrate.Setup
                     else await Task.Run(() => process.WaitForExit());
                     string text = await output;
                     await errors;
-                    token.ThrowIfCancellationRequested();
+                    if (action != "RestoreSelection") token.ThrowIfCancellationRequested();
                     Dictionary<string, object> record = json.DeserializeObject(text.Trim()) as Dictionary<string, object>;
                     if (record == null || !record.ContainsKey("Succeeded") || !record.ContainsKey("Message"))
                         throw new InvalidDataException("Invalid setup result.");
@@ -121,6 +129,13 @@ namespace NetCrate.Setup
                     object value;
                     if (record.TryGetValue("PairingCode", out value)) result.PairingCode = Convert.ToString(value);
                     if (record.TryGetValue("PairingStage", out value)) result.PairingStage = Convert.ToString(value);
+                    if (record.TryGetValue("NextCursor", out value)) result.NextCursor = Convert.ToString(value);
+                    if (record.TryGetValue("RestoredPath", out value)) result.RestoredPath = Convert.ToString(value);
+                    if (record.TryGetValue("Items", out value) && value is object[]) {
+                        object[] items = (object[])value;
+                        if (items.Length > 200) throw new InvalidDataException("The backup page is too large.");
+                        foreach (object item in items) result.Items.Add(json.ConvertToType<BackupItem>(item));
+                    }
                     object software;
                     if (record.TryGetValue("Software", out software) && software is object[])
                         foreach (object item in (object[])software)
@@ -136,6 +151,10 @@ namespace NetCrate.Setup
             finally { if (File.Exists(input)) File.Delete(input); }
         }
 
+        public Task<SetupResult> InvokeRestoreAsync(string action, RestoreRequest request, CancellationToken token) {
+            if (action != "ListBackups" && action != "ListBackupChildren" && action != "RestoreSelection") throw new ArgumentException("Unsupported recovery action.");
+            return InvokePreparationAsync(action, new SetupState(), token, null, null, request);
+        }
         private static string Quote(string path)
         {
             if (path.IndexOf('"') >= 0 || path.IndexOf('\n') >= 0 || path.IndexOf('\r') >= 0)

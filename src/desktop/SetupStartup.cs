@@ -13,10 +13,11 @@ namespace NetCrate
         {
             string setupRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetCrate", "Setup");
             string engine = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "install");
-            SetupController controller = new SetupController(new WindowsSetupService(engine, setupRoot),
+            WindowsSetupService service = new WindowsSetupService(engine, setupRoot);
+            SetupController controller = new SetupController(service,
                 new JsonSetupStore(Path.Combine(setupRoot, "state.json")));
             Application app = new Application();
-            SetupView view = new SetupView(controller);
+            SetupView view = new SetupView(controller, service);
             app.Run(view);
             return view.SetupCompleted;
         }

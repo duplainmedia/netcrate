@@ -45,20 +45,48 @@ namespace NetCrate.Setup
         public string Message { get; private set; }
         public string PairingCode { get; set; }
         public string PairingStage { get; set; }
-        public IList<SoftwareCheck> Software { get; set; }
+        public IList<SoftwareCheck> Software { get; set; }        public IList<BackupItem> Items { get; set; }
+        public string NextCursor { get; set; }
+        public string RestoredPath { get; set; }
 
         private SetupResult(bool succeeded, string code, string message)
         {
             Succeeded = succeeded;
             Code = code;
             Message = message;
-            Software = new List<SoftwareCheck>();
+            Software = new List<SoftwareCheck>(); Items = new List<BackupItem>();
         }
 
         public static SetupResult Done(string message) { return new SetupResult(true, "ok", message); }
         public static SetupResult ActionRequired(string code, string message) { return new SetupResult(false, code, message); }
     }
 
+    public sealed class BackupItem {
+        public string Name { get; set; }
+        public string Type { get; set; }
+        public string SnapshotId { get; set; }
+        public string RelativePath { get; set; }
+        public string Project { get; set; }
+        public string SourceComputer { get; set; }
+        public string BackupCompletedUtc { get; set; }
+        public string Completion { get; set; }
+        public long Size { get; set; }
+        public override string ToString() { return Name; }
+    }
+    // Ephemeral action context. Never persisted with setup state; contains paths only.
+    public sealed class RestoreRequest {
+        public string InstallationId { get; set; }
+        public string RecoveryFile { get; set; }
+        public string RepositoryPath { get; set; }
+        public string SnapshotId { get; set; }
+        public string RelativePath { get; set; }
+        public string DestinationParent { get; set; }
+        public string Cursor { get; set; }
+        public RestoreRequest Copy() { return (RestoreRequest)MemberwiseClone(); }
+    }
+    public interface IRestoreService {
+        System.Threading.Tasks.Task<SetupResult> InvokeRestoreAsync(string action, RestoreRequest request, System.Threading.CancellationToken token);
+    }
     public sealed class SoftwareCheck
     {
         public string Name { get; set; }

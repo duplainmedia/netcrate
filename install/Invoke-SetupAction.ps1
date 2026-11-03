@@ -1,11 +1,45 @@
 #requires -Version 5.1
-param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup')][string]$Action,
+param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection')][string]$Action,
     [Parameter(Mandatory)][string]$InputFile)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Both the PS5 producer/relay and PS7 producer must match the UTF8 C# reader.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 try {
     Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Configuration.psm1')
     $state = Read-NetCrateJson $InputFile -MaximumBytes 32768
+    $restoreAction = $Action -cin @('ListBackups','ListBackupChildren','RestoreSelection')
+    if ($restoreAction) {
+        $root = [IO.Path]::Combine([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($InputFile)), 'Engine')
+        $null = Assert-NetCrateLocalPath $root
+        foreach ($name in @('RecoveryFile','RepositoryPath','DestinationParent')) {
+            if ($state.PSObject.Properties.Name -contains $name -and $state.$name) {
+                if ($state.$name -isnot [string] -or $state.$name.Length -gt 240) { throw 'Choose a shorter ordinary local path.' }
+                $null = Assert-NetCrateLocalPath $state.$name
+            }
+        }
+        foreach ($name in @('SnapshotId','RelativePath','Cursor')) {
+            if ($state.PSObject.Properties.Name -contains $name -and $null -ne $state.$name -and ($state.$name -isnot [string] -or $state.$name.Length -gt 1024)) { throw 'The backup selection is invalid.' }
+        }
+        if ($state.Version -ne 1) { throw 'The recovery request is unsupported.' }
+        $independent = $state.PSObject.Properties.Name -contains 'RecoveryFile' -and $state.RecoveryFile
+        if ($independent -and (-not $state.RepositoryPath)) { throw 'Choose the attached originals backup folder.' }
+        if (-not $independent -and ($state.Role -cne 'EditingComputer' -or $state.InstallationId -cnotmatch '^[a-f0-9]{32}$')) { throw 'Open restore from the source dashboard or choose a recovery file.' }
+        $bootstrap = [IO.Path]::Combine([IO.Path]::GetDirectoryName($InputFile), 'Bootstrap')
+        Import-Module (Join-Path $PSScriptRoot 'NetCrate.Dependencies.psm1')
+        if ($PSVersionTable.PSVersion.Major -lt 7) {
+            $tools = Install-NetCrateRecoveryTools $bootstrap @('PowerShell')
+            & $tools.PowerShell -NoLogo -NoProfile -NonInteractive -File $PSCommandPath -Action $Action -InputFile $InputFile
+            exit $LASTEXITCODE
+        }
+        $restic = ''
+        if ($independent) { $restic = (Install-NetCrateRecoveryTools $bootstrap @('Restic')).Restic }
+        Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Restore.psm1')
+        $result = Invoke-NetCrateRestoreAction $Action $state $root $restic
+        $result | ConvertTo-Json -Depth 8 -Compress
+        exit 0
+    }
     if ($state.Version -ne 1 -or $state.Role -cnotin @('EditingComputer', 'BackupServer') -or $state.InstallationId -cnotmatch '^[a-f0-9]{32}$') { throw 'Invalid setup input.' }
     $mode = Get-NetCrateBackupMode $state
     foreach ($field in @('Folder','Path')) {

@@ -19,6 +19,7 @@ namespace NetCrate.Setup
     public sealed class SetupView : Window
     {
         private readonly SetupController controller;
+        private readonly IRestoreService restoreService;
         private readonly Grid shell = new Grid();
         private readonly Dictionary<string, Control> controls = new Dictionary<string, Control>();
         private bool checkingSoftware;
@@ -28,9 +29,10 @@ namespace NetCrate.Setup
         public bool SetupCompleted { get; private set; }
         private CancellationToken CheckToken { get { return checkCancellation == null ? CancellationToken.None : checkCancellation.Token; } }
 
-        public SetupView(SetupController controller)
+        public SetupView(SetupController controller, IRestoreService restoreService = null)
         {
             this.controller = controller;
+            this.restoreService = restoreService ?? new WindowsSetupService(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "install"));
             Title = "Set up NetCrate";
             Width = 1060;
             Height = 760;
@@ -233,6 +235,7 @@ namespace NetCrate.Setup
             Heading(panel, "Which computer is this?", null);
             panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "Stores the files you want to back up.", "\uE770"));
             panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "Stores backups on its connected drive.", "\uE977"));
+            panel.Children.Add(Button("Recover from a recovery file", () => NetCrate.RestoreView.OpenRecovery(this, restoreService), false));
             FlowDiagram(panel);
         }
 
@@ -408,6 +411,7 @@ namespace NetCrate.Setup
         {
             bool editing = controller.State.Role == ComputerRole.EditingComputer;
             Heading(panel, "Connect your computers", "Both computers need a private connection. Use NetBird, or choose an existing connection below.");
+            panel.Children.Add(Button("Recover from a recovery file", () => NetCrate.RestoreView.OpenRecovery(this, restoreService), false));
             FlowDiagram(panel);
             panel.Children.Add(Button("Open NetBird", async () => await RunSafeAsync(() => controller.NetworkAsync(CheckToken)), false));
             StackPanel existing = new StackPanel();
