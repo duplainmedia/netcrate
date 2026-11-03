@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/desktop/Assets/NetCrate-Crate-Transparent.png" alt="NetCrate logo" width="160" height="160">
+</p>
+
 # NetCrate
 
 NetCrate backs up Windows folders to a computer you control and optionally processes video proxies.

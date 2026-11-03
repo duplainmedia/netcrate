@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased (0.1.1 development)
+## Unreleased (0.1.2 development)
 
+- Maintenance history retires harmless failures while preserving recovery journals.
+- The repository page displays the NetCrate logo.
 - Backup success requires a recovery receipt.
 - Recovery supports long filenames and empty files.
 - Later requests capture new changes despite pending receipts.
