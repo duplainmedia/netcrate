@@ -43,6 +43,7 @@ class WizardFlowTests {
   RecheckingConnectionDropsOldProof();
   ManualPairingUsesTypedPrivateAddress();
   ManualServerReopenAndError();
+  CancelledManualImport();
   ServerReceptionResume();
   app.Shutdown();Console.WriteLine("PASS: "+assertions+" guided wizard flow assertions.");
  }
@@ -177,6 +178,22 @@ class WizardFlowTests {
  class RecoveryTestClipboard:IRecoveryClipboard{public bool Cleared;public uint Write(RecoveryClipboardPayload p){return 1;}public bool ClearIfOwned(uint t){Cleared=true;return true;}}
  class RecoveryTestExpiry:IRecoveryExpiryScheduler{public Action Callback;public IDisposable Schedule(TimeSpan delay,Action callback){Callback=callback;return new Empty();}class Empty:IDisposable{public void Dispose(){}}}
  class ResumeStore:ISetupStore{public SetupState Saved;public SetupState Load(){return Saved.Copy();}public void Save(SetupState s){Saved=s.Copy();}}
+ static void CancelledManualImport(){
+  var service=new FixtureService{PackagesReused=true,RequiredManualAddress="192.168.1.20"};
+  var store=new ResumeStore{Saved=new SetupState{Role=ComputerRole.EditingComputer,Folder=@"C:\OrdinaryFiles",NetworkAddress="192.168.1.20"}};
+  var c=new SetupController(service,store);var view=new SetupView(c,null,new Pairing());view.Show();Pump();Click(view,"Continue");Pump();Click(view,"Use manual file exchange");Pump();
+  c.ExportConnectionAsync("request.netcrate",CancellationToken.None).GetAwaiter().GetResult();Pump();
+  Assert(c.PairingStage=="RequestSaved","Cancellation fixture did not start with the old request comparison.");
+  using(var cancel=new CancellationTokenSource()){
+   service.CancelAfterImport=cancel;
+   c.ImportConnectionAsync("reply.netcrate",cancel.Token).GetAwaiter().GetResult();Pump();
+  }
+  Assert(c.LastResult.Code=="cancelled"&&String.IsNullOrEmpty(c.PairingCode)&&String.IsNullOrEmpty(c.PairingStage),"Cancelled durable import retained the old request/device comparison.");
+  Assert(!Find<TextBox>(view).Exists(t=>AutomationProperties.GetName(t)=="Code to compare with other computer"),"Cancelled import still displays a cached comparison.");
+  service.CancelAfterImport=null;c.HydrateManualPairingAsync(CancellationToken.None).GetAwaiter().GetResult();Pump();
+  Assert(c.PairingStage=="ReplyImported"&&c.PairingCode=="ABCD EF01 2345 6789","A later uncancelled backend read did not restore the durably imported reply.");
+  view.Close();Pump();
+ }
  static void ServerReceptionResume(){
   var pair=new Pairing{Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.ReceptionRequired,LocalAddress="192.168.1.20",PeerAddress="192.168.1.10"}};
   var store=new ResumeStore{Saved=new SetupState{Role=ComputerRole.BackupServer,Folder=@"C:\BackupStorage",NetworkAddress="192.168.1.20",RecoveryExported=true,RecoverySavedPath=@"C:\Recovery\keys.netcrate",RecoveryLocalOnly=true}};
@@ -187,9 +204,17 @@ class WizardFlowTests {
   Find<CheckBox>(view).Find(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule").IsChecked=true;Pump();Click(view,"Allow temporary reception");Pump();
   Assert(pair.LastRequest!=null&&!pair.LastRequest.StartAgain&&pair.LastRequest.ApproveFirewall,"Reception resume requested identity replacement instead of reapproval.");
   view.Close();Pump();
-  pair=new Pairing{Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.CompareConnection,ComparisonCode="ABCD EF01 2345 6789"}};
+  pair=new Pairing{Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.CompareConnection,ComparisonCode="ABCD EF01 2345 6789",LocalAddress="192.168.1.20",PeerAddress="192.168.1.10"}};
+  var retryProperty=typeof(NetworkSetupStatus).GetProperty("CanRetryReception");if(retryProperty!=null)retryProperty.SetValue(pair.Status,true,null);
   c=new SetupController(new FixtureService{PackagesReused=true},store);view=new SetupView(c,null,pair);view.Show();Pump();Click(view,"Continue");Pump();
-  Assert(Find<TextBox>(view).Exists(b=>b.IsReadOnly&&b.Text=="ABCD EF01 2345 6789")&&!Find<CheckBox>(view).Exists(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule"),"Delivered server reopen lost its comparison or requested another listener.");view.Close();Pump();
+  Assert(Find<TextBox>(view).Exists(b=>b.IsReadOnly&&b.Text=="ABCD EF01 2345 6789"),"Delivered server reopen lost its comparison code.");
+  var retry=Find<Button>(view).Find(b=>AutomationProperties.GetName(b)=="Retry reply delivery");
+  Assert(retry!=null&&!retry.IsEnabled&&Find<CheckBox>(view).Exists(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule"),"Closed delivered reply cannot request fresh scoped reception while retaining its code.");
+  var scope=(TextBlock)Find<CheckBox>(view).Find(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule").Content;
+  Assert(scope.Text.Contains("192.168.1.20")&&scope.Text.Contains("192.168.1.10"),"Reply redelivery consent did not describe the original exact address scope.");
+  Find<CheckBox>(view).Find(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule").IsChecked=true;Pump();Click(view,"Retry reply delivery");Pump();
+  Assert(pair.LastRequest!=null&&!pair.LastRequest.StartAgain&&pair.LastRequest.ApproveFirewall&&pair.LastRequest.LocalAddress=="192.168.1.20"&&pair.LastRequest.PeerAddress=="192.168.1.10","Reply redelivery replaced the pending identity or bypassed fresh scoped approval.");
+  Assert(Find<TextBox>(view).Exists(b=>b.IsReadOnly&&b.Text=="ABCD EF01 2345 6789"),"Reception retry hid the existing connection comparison.");view.Close();Pump();
  }
  static void Snapshot(SetupView view,string name){
   string directory=Path.Combine(Environment.CurrentDirectory,".superpowers","sdd","2026-11-03-guided-setup","ui");Directory.CreateDirectory(directory);
@@ -210,6 +235,7 @@ class WizardFlowTests {
  class FixtureService:ISetupService,ISoftwarePreparationService,IManualPairingStatusService{
   public bool FailPreparation,PackagesReused,ManualConnectionUnavailable;
   public string RequiredManualAddress;
+  public CancellationTokenSource CancelAfterImport;
   public string DurableStage,DurableCode;
   public Task<SetupResult> ManualPairingStatusAsync(SetupState s,CancellationToken t){var r=SetupResult.Done("Manual status");if(RequiredManualAddress==null||s.NetworkAddress==RequiredManualAddress){r.PairingStage=DurableStage;r.PairingCode=DurableCode;}return Task.FromResult(r);}
   bool manualConfirmed;
@@ -221,7 +247,7 @@ class WizardFlowTests {
   public Task<SetupResult> PrepareApprovedAsync(SetupState s,string p,IProgress<SoftwareProgress> progress,CancellationToken t){return FailPreparation ? Task.FromResult(SetupResult.ActionRequired("download-failed","A package failed.")) : Done();}
   public Task<SetupResult> ReviewNetworkAsync(SetupState s,CancellationToken t){return Done();} public Task<SetupResult> NetworkApprovedAsync(SetupState s,string p,CancellationToken t){return Done();}
   public Task<SetupResult> PrepareAsync(SetupState s,IProgress<string> p,CancellationToken t){throw new Exception("Ungated preparation");}
-  public Task<SetupResult> SaveRecoveryAsync(SetupState s,string p,CancellationToken t){return Done();}public Task<SetupResult> ExportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;return ManualResult(s,"RequestSaved","ABCD EF01 2345 6789");}public Task<SetupResult> ImportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;return ManualResult(s,"ReplyImported","ABCD EF01 2345 6789");}public Task<SetupResult> ConfirmConnectionAsync(SetupState s,string p,CancellationToken t){if(RequiredManualAddress!=null&&p!="ABCD EF01 2345 6789")return Task.FromResult(SetupResult.ActionRequired("code-missing","The imported comparison code was lost."));manualConfirmed=RequiredManualAddress==null||s.NetworkAddress==RequiredManualAddress;return ManualResult(s,"ReplyConfirmed",p);}public Task<SetupResult> NetworkAsync(SetupState s,CancellationToken t){return Done();}public Task<SetupResult> FinishAsync(SetupState s,CancellationToken t){return Task.FromResult(SetupResult.Done("Fixture finish verified"));}public Task<SetupResult> CheckConnectionAsync(SetupState s,CancellationToken t){return RequiredManualAddress!=null&&!manualConfirmed ? Task.FromResult(SetupResult.ActionRequired("confirm-first","Compare the imported codes before checking the connection.")) : ManualConnectionUnavailable ? Task.FromResult(SetupResult.ActionRequired("offline","The private connection is offline.")) : ManualResult(s,null,null);}public Task<SetupResult> CheckSampleAsync(SetupState s,IProgress<string> p,CancellationToken t){return Done();}
+  public Task<SetupResult> SaveRecoveryAsync(SetupState s,string p,CancellationToken t){return Done();}public Task<SetupResult> ExportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;return ManualResult(s,"RequestSaved","ABCD EF01 2345 6789");}public Task<SetupResult> ImportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;var imported=ManualResult(s,"ReplyImported","ABCD EF01 2345 6789");if(CancelAfterImport!=null)CancelAfterImport.Cancel();return imported;}public Task<SetupResult> ConfirmConnectionAsync(SetupState s,string p,CancellationToken t){if(RequiredManualAddress!=null&&p!="ABCD EF01 2345 6789")return Task.FromResult(SetupResult.ActionRequired("code-missing","The imported comparison code was lost."));manualConfirmed=RequiredManualAddress==null||s.NetworkAddress==RequiredManualAddress;return ManualResult(s,"ReplyConfirmed",p);}public Task<SetupResult> NetworkAsync(SetupState s,CancellationToken t){return Done();}public Task<SetupResult> FinishAsync(SetupState s,CancellationToken t){return Task.FromResult(SetupResult.Done("Fixture finish verified"));}public Task<SetupResult> CheckConnectionAsync(SetupState s,CancellationToken t){return RequiredManualAddress!=null&&!manualConfirmed ? Task.FromResult(SetupResult.ActionRequired("confirm-first","Compare the imported codes before checking the connection.")) : ManualConnectionUnavailable ? Task.FromResult(SetupResult.ActionRequired("offline","The private connection is offline.")) : ManualResult(s,null,null);}public Task<SetupResult> CheckSampleAsync(SetupState s,IProgress<string> p,CancellationToken t){return Done();}
  }
  class Pairing:INetworkPairingService{public NetworkSetupRequest LastRequest;public TaskCompletionSource<NetworkSetupStatus> InspectCompletion;public NetworkSetupStatus PollStatus;public NetworkSetupStatus Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.Idle};public Task<NetworkSetupStatus> InspectAsync(SetupState s,CancellationToken t){return InspectCompletion==null ? Task.FromResult(Status) : InspectCompletion.Task;}public Task<NetworkSetupStatus> StartAsync(SetupState s,NetworkSetupRequest r,CancellationToken t){LastRequest=r;return InspectAsync(s,t);}public Task<NetworkSetupStatus> PollAsync(SetupState s,CancellationToken t){return Task.FromResult(PollStatus ?? Status);}public Task<NetworkSetupStatus> ConfirmAsync(SetupState s,string c,CancellationToken t){return InspectAsync(s,t);}public Task<NetworkSetupStatus> ResetPendingAsync(SetupState s,CancellationToken t){Status=new NetworkSetupStatus();return Task.FromResult(Status);}public Task<NetworkSetupStatus> StopAsync(CancellationToken t){return Task.FromResult(new NetworkSetupStatus());}public void Dispose(){}}
 }

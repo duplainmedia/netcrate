@@ -17,6 +17,7 @@ namespace NetCrate.Setup
         public string LocalAddress { get; set; }
         public string PeerAddress { get; set; }
         public string ComparisonCode { get; set; }
+        public bool CanRetryReception { get; set; }
         public string Message { get; set; }
         public NetworkSetupPeer[] Peers { get; set; }
         public NetworkSetupStatus() { Peers = new NetworkSetupPeer[0]; }

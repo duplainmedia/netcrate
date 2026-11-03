@@ -147,7 +147,7 @@ function Test-NetCrateNetworkLease($Context) {
     if($Context.Active -and ([datetime]::UtcNow -ge $Context.Until -or ($Context.GuardianClosed -and $Context.GuardianClosed.IsCompleted))){Stop-NetCrateNetworkSession $Context;throw 'The temporary connection expired. Start a new lease.'}
 }
 function New-NetworkStatus($Context,$Phase,$Message,[string]$Code='') {
-    return @{Phase=$Phase;Message=$Message;ComparisonCode=$Code;LocalAddress=$Context.Local;PeerAddress=$Context.Peer;Peers=@()}
+    return @{Phase=$Phase;Message=$Message;ComparisonCode=$Code;LocalAddress=$Context.Local;PeerAddress=$Context.Peer;Peers=@();CanRetryReception=$false}
 }
 function Get-NetCrateDeliveryData($Reply) {
     return [ordered]@{Kind='reply-received';RequestId=$Reply.RequestId;ReplyHash=(Get-NetCrateHash $Reply.Signature)}
@@ -183,7 +183,8 @@ function Get-NetCrateNetworkStatus($Context) {
             if([datetimeoffset]$inbound.Request.ExpiresUtc -gt [datetimeoffset]::UtcNow -and (-not $verified -or $verified.RequestId -cne $inbound.Request.RequestId)){
                 if($sealed -and $sealed.Reply.RequestId -ceq $inbound.Request.RequestId -and (Test-NetCrateDeliveredReply $Context.Root $sealed.Reply)){
                     $result.Phase='CompareConnection';$result.ComparisonCode=$sealed.Reply.ConnectionCode
-                    $result.Message='Compare this connection code on the Editing Computer. Temporary reception remains closed.'
+                    $result.CanRetryReception=([datetimeoffset]$sealed.Reply.ExpiresUtc -gt [datetimeoffset]::UtcNow)
+                    $result.Message='Compare this code on the Editing Computer. If it is still waiting for the reply, approve temporary reception to retry this same reply. Reception remains closed until approval.'
                 } else {
                     $result.Phase='ReceptionRequired'
                     $result.Message='Approve temporary reception again for these same addresses so the Editing Computer can collect the existing encrypted reply.'

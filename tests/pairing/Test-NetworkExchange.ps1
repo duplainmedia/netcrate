@@ -3,7 +3,7 @@ param([Parameter(Mandatory)][string]$ToolsRoot,[switch]$Renewal,[switch]$LateAck
 $ErrorActionPreference='Stop'
 if(Test-Path -LiteralPath $TestRoot){throw 'Choose a new disposable TestRoot.'}
 $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-foreach($module in @('Configuration','Credentials','Pairing')){Import-Module (Join-Path $repo "src/shared/NetCrate.$module.psm1")}
+foreach($module in @('Configuration','Credentials','Pairing','Protocol')){Import-Module (Join-Path $repo "src/shared/NetCrate.$module.psm1")}
 foreach($module in @('Engine','Repositories','NetworkSetup')){Import-Module (Join-Path $repo "install/NetCrate.$module.psm1") -DisableNameChecking}
 function Assert($c,$reason){if(-not $c){throw $reason}}
 function Reject([scriptblock]$f){try{& $f|Out-Null}catch{return};throw ('Invalid operation succeeded at fixture line '+$f.StartPosition.StartLine+'.')}
@@ -48,7 +48,7 @@ $serverCtx=New-NetCrateNetworkContext $server $ss
 $clientCtx=New-NetCrateNetworkContext $source $cs
 $serverReq=[pscustomobject]@{LocalAddress=$ss.NetworkAddress;PeerAddress=$cs.NetworkAddress;ApproveFirewall=$true;StartAgain=$false}
 $clientReq=[pscustomobject]@{LocalAddress=$cs.NetworkAddress;PeerAddress=$ss.NetworkAddress;ApproveFirewall=$false;StartAgain=$false}
-function Exchange {
+function Exchange([switch]$DropDeliveryOk) {
     # Pump one request in a separate runspace so both socket ends run concurrently.
     $pump=[PowerShell]::Create()
     try {
@@ -60,7 +60,21 @@ function Exchange {
             Invoke-NetCrateNetworkExchange $context -ReceiveOnly
         }).AddArgument($repo).AddArgument($serverCtx)
         $async=$pump.BeginInvoke()
-        $result=Invoke-NetCrateNetworkExchange $clientCtx
+        if($DropDeliveryOk){
+            # Close the real source TLS stream after its signed receipt, before
+            # consuming delivery-ok. Worker publication still runs normally.
+            $channel=[NetCrate.SetupWire]::Connect($clientCtx.Local,$clientCtx.Peer,8201)
+            try {
+                $wire=Get-NetCrateStableRequest $source $cs.Folder $cs.NetworkAddress Folder
+                [NetCrate.SetupWire]::Write($channel.Stream,($wire|ConvertTo-Json -Depth 24 -Compress),15000)
+                $wireReply=[NetCrate.SetupWire]::Read($channel.Stream,15000)|ConvertFrom-Json
+                $null=Receive-NetCrateStableReply $source $wireReply
+                $delivery=[ordered]@{Kind='reply-received';RequestId=$wireReply.RequestId;ReplyHash=(Get-NetCrateHash $wireReply.Signature)}
+                $receipt=[ordered]@{Kind=$delivery.Kind;RequestId=$delivery.RequestId;ReplyHash=$delivery.ReplyHash;Signature=(Get-PairingSignature $source $delivery)}
+                [NetCrate.SetupWire]::Write($channel.Stream,($receipt|ConvertTo-Json -Compress),15000)
+            } finally {$channel.Dispose()}
+            $result=$null
+        } else {$result=Invoke-NetCrateNetworkExchange $clientCtx}
         if(-not $async.AsyncWaitHandle.WaitOne(18000)){throw 'Server exchange timed out.'}
         $null=$pump.EndInvoke($async)
         if($pump.HadErrors){throw $pump.Streams.Error[0]}
@@ -166,6 +180,22 @@ try {
     Assert (-not (Get-NetCratePairingRecord $source pending-reply)) 'A rejected reply poisoned the source pending record.'
     Protect-NetCrateRecord $source network-selection @{LocalAddress=$cs.NetworkAddress;PeerAddress=$ss.NetworkAddress}
     Protect-NetCrateRecord $source network-proof $savedProof
+    if($Resume){
+        $null=Exchange -DropDeliveryOk
+        Assert ((Get-NetCratePairingRecord $server reply-delivered) -and -not (Get-NetCratePairingRecord $source reply-delivered)) 'Lost delivery-ok fixture did not create worker-only delivery evidence.'
+        Stop-NetCrateNetworkSession $serverCtx;Stop-NetCrateNetworkSession $clientCtx
+        $serverCtx=New-NetCrateNetworkContext $server $ss;$clientCtx=New-NetCrateNetworkContext $source $cs
+        $closed=Get-NetCrateNetworkStatus $serverCtx
+        Assert ($closed.Phase -ceq 'CompareConnection' -and $closed.ComparisonCode -and -not $serverCtx.Listener) 'Worker-only receipt lost its comparison code or implicitly reopened reception.'
+        Assert ($closed.ContainsKey('CanRetryReception') -and $closed.CanRetryReception) 'Worker-only delivery receipt leaves no same-reply reception retry after reopen.'
+        Assert (-not (Get-NetCrateNetworkStatus $clientCtx).ComparisonCode) 'The source displayed a connection comparison before consuming delivery confirmation.'
+        $denied=$serverReq.PSObject.Copy();$denied.ApproveFirewall=$false
+        Reject {Start-NetCrateNetworkSession $serverCtx $denied}
+        $wrongScope=$serverReq.PSObject.Copy();$wrongScope.LocalAddress=$cs.NetworkAddress;$wrongScope.PeerAddress=$ss.NetworkAddress
+        Reject {Start-NetCrateNetworkSession $serverCtx $wrongScope}
+        Start-NetCrateNetworkSession $serverCtx $serverReq;Start-NetCrateNetworkSession $clientCtx $clientReq
+        Assert ((Get-NetCrateStableReply $server).Signature -ceq $cached -and (Unprotect-NetCrateRecord $server inbound-request).Request.RequestId -ceq $identity) 'Receipt retry replaced the existing identity or encrypted reply.'
+    }
     $reply=Exchange
     $confirmed=Get-NetCrateNetworkStatus $serverCtx
     Assert ($confirmed.Phase -ceq 'CompareConnection' -and $reply.Phase -ceq 'CompareConnection' -and $reply.ComparisonCode -ceq $confirmed.ComparisonCode) 'Connection codes differ.'

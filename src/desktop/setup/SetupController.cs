@@ -393,6 +393,7 @@ namespace NetCrate.Setup
             }
             catch (OperationCanceledException)
             {
+                PairingCode = ""; PairingStage = "";
                 LastResult = SetupResult.ActionRequired("cancelled", "Setup paused. Choose Try again to continue.");
             }
             catch (Exception)

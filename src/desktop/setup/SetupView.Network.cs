@@ -51,7 +51,14 @@ namespace NetCrate.Setup {
     case NetworkSetupPhase.CompareDevice:
      panel.Children.Add(Text(server ? "Compare this device code with the Editing Computer. Choose Codes match only when every group agrees. This authorizes the intended source identity." : "Compare this device code on the Backup Server, then choose Codes match there. No repository secrets are released before the server confirms.",14,Theme.Text));Code(panel);break;
     case NetworkSetupPhase.CompareConnection:
-     panel.Children.Add(Text(server ? "Compare this connection code with the Editing Computer. On the Editing Computer, choose Codes match only when both screens agree. This server waits for that confirmation." : "Compare this connection code with the Backup Server. It verifies the encrypted reply and the Backup Server certificate. Choose Codes match only when both screens agree.",14,Theme.Text));Code(panel);break;
+     panel.Children.Add(Text(server ? "Compare this connection code with the Editing Computer. On the Editing Computer, choose Codes match only when both screens agree. This server waits for that confirmation." : "Compare this connection code with the Backup Server. It verifies the encrypted reply and the Backup Server certificate. Choose Codes match only when both screens agree.",14,Theme.Text));Code(panel);
+     if(server&&networkStatus.CanRetryReception){
+      panel.Children.Add(Text("If the Editing Computer is still waiting for the reply, retry delivery of this same reply to the same peer. The comparison code and pending identity stay the same.",13,Theme.Muted));
+      firewallConsent=Consent("Approve temporary setup firewall rule",FirewallDescription(),firewallApproved,b=>{if(updatingFirewall)return;firewallApproved=b;Render();});panel.Children.Add(firewallConsent);
+      var retry=Button("Retry reply delivery",async ()=>await RunSafeAsync(()=>NetworkActionAsync(false)),false);
+      retry.IsEnabled=firewallApproved&&!viewBusy&&!controller.Busy;panel.Children.Add(retry);
+     }
+     break;
     case NetworkSetupPhase.WaitingForAcknowledgment:
      panel.Children.Add(Text("Waiting for the other computer's confirmation. Leave both setup windows open. NetCrate automatically verifies the repositories and acknowledgment after confirmation.",14,Theme.Text));break;
     case NetworkSetupPhase.Connected:panel.Children.Add(Text("The private connection, both repositories and the acknowledgment passed verification.",14,Theme.Text));break;
