@@ -11,6 +11,8 @@ PR 12 is open. Branch `codex/recovery-bootstrap-paths` starts at its head `2ed64
 - [x] In `install/NetCrate.Dependencies.psm1`, apply the adapter at download/cache, extraction, stamp, hash and move boundaries. Keep package paths, relative checks, identity and publication behavior.
 - [x] Add the regression to Windows CI. Run configuration/dependency checks under both hosts and the actual Windows PowerShell 5.1 recovery bridge on fresh short and long OriginalsRestore fixtures with pinned verified archives. Verify recovered bytes and private ACLs.
 - [x] Run desktop suites, versioning and packaging. Set `VERSION` to `0.1.3`, update Unreleased notes and the roadmap with actual evidence. Retain physical-machine acceptance as outstanding.
-- [ ] Obtain independent review, push and open the separate PR. Verify Windows CI, leave merge to the user and retarget to main if PR 12 merges during this work.
+- [x] Obtain independent review, push and open the separate PR. Verify Windows CI, leave merge to the user and retarget to main if PR 12 merges during this work.
 
 Review focus includes linked ancestors beyond the legacy path limit, existing package repair, literal Unicode/bracket names, file/directory collisions, and metadata publication through long paths. Tests exercise file effects and byte hashes, not source text.
+
+PR [#14](https://github.com/duplainmedia/netcrate/pull/14) is open against PR 12's branch. Independent review is complete and the traversal fixture correction is mutation-tested. Windows CI checks the final branch. Merge and publication remain with the user.
