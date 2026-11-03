@@ -32,7 +32,7 @@ The default recipe is `half-prores-v2`: half-size ProRes Proxy, 10-bit 4:2:2, so
 
 Requests identify an exact successful source snapshot and a recipe-dependent footage fingerprint derived from Restic content identities. The server independently derives that identity, restores with verification, encodes and checks the media. Reusing a generation creates a new association that preserves both the newly requested snapshot and the original generation snapshot.
 
-The Editing Computer validates signatures, identities, recipe, manifest membership, sizes and hashes before promoting an immutable version under the project's `Proxies\NetCrate` folder. Unexpected files, links, path traversal and case collisions are rejected. No operation deletes earlier backup snapshots or proxy versions.
+The Editing Computer validates signatures, identities, recipe, manifest membership, sizes and hashes before promoting an immutable version under the project's `Proxies\NetCrate` folder. Unexpected files, links, path traversal and case collisions are rejected. Media generation and delivery preserve earlier backup snapshots and proxy versions. Separately, the repository owner can explicitly confirm removal of older eligible Folder backup snapshots through server-side retention.
 
 ## Tests
 

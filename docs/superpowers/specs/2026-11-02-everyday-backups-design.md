@@ -29,3 +29,7 @@ Continue the C# WPF/.NET Framework 4.8 desktop, PowerShell engine, Restic storag
 ## Builder decisions
 
 This document records the already-approved roadmap. Builders may settle routine interface and implementation choices and record significant decisions in the plan ledger. The first release stays Windows x64, one source and one backup server. Both accounts must be signed in while work runs. Retention implementation must preserve recovery and protocol dependencies, not just delete by age.
+
+## Experimental source publication
+
+On 3 November, the scope changed to preparing a PR for experimental source publication, with the known review findings logged and a prioritized follow-up plan. The user will merge and make the repository public. The PR keeps the tested implementation, documents the unresolved issues, and does not claim a clean final review or supported release. Unfinished implementation work is preserved separately rather than included. See [the experimental roadmap](../../experimental-roadmap.md).

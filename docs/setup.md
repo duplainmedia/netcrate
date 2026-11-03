@@ -1,5 +1,7 @@
 # Set up NetCrate
 
+NetCrate is experimental and has unresolved recovery, completion-reporting and cleanup issues. Use generated or disposable test data, keep independent backups, and read the [known issues and fix plan](experimental-roadmap.md) before setup. These instructions do not establish production readiness.
+
 Use two Windows x64 computers: your source computer (called **Editing Computer** in setup) and another computer with enough backup storage. Keep both computers on and signed in to Windows while NetCrate runs. NetCrate resumes its background tasks when you sign in.
 
 ## On both computers

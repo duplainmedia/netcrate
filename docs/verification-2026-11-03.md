@@ -1,5 +1,7 @@
 # Everyday backup verification
 
+The final whole-branch review identified five unresolved integration issues despite the passing checks below. They affect recovery names, premature completion reporting, interrupted cleanup, cross-session admission and actionable error reporting. This is an experimental source snapshot, not a dependable backup release. The [known issues and prioritized follow-up plan](experimental-roadmap.md) describe the remaining work. Passing covered scenarios must not be read as a clean final review.
+
 The private Windows build implements ordinary folder backups, optional media processing, selective recovery, daily schedules, storage checks and deliberate server-side retention. The implementation stays on `codex/everyday-backups`, based on `release-preparation` at `f50962a0c925f76519f66c54fe8dbc1f8aac81ff`. Each implementation task received an independent review and scoped fixes before completion.
 
 The controller ran the combined verification on `63f5df8c20a0d804991383d859bf2c06f495f9ab` from 05:28:51 to 05:39:09 UTC on 3 November 2026. All 26 checks passed with no missing, skipped or timed-out check groups and no source changes during the run. Within the Python group, 19 tests passed and one inherited legacy native callback test was explicitly skipped. The later `7793964ecb4e0319a6c40fee228ced30599bb85d` commit adds only the foreground retention test and its helper; the application and installation code are unchanged. That added test passed separately with exit 0 in 59.7 seconds, and its scoped review is clean.
