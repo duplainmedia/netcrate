@@ -4,6 +4,12 @@ using System.Threading.Tasks;
 
 namespace NetCrate.Setup
 {
+    public interface ISoftwarePreparationService {
+        Task<SetupResult> ReviewSoftwareAsync(SetupState state, CancellationToken token);
+        Task<SetupResult> PrepareApprovedAsync(SetupState state, string planId, IProgress<SoftwareProgress> progress, CancellationToken token);
+        Task<SetupResult> ReviewNetworkAsync(SetupState state, CancellationToken token);
+        Task<SetupResult> NetworkApprovedAsync(SetupState state, string planId, CancellationToken token);
+    }
     public interface ISetupService
     {
         Task<SetupResult> CheckFolderAsync(ComputerRole role, string folder, CancellationToken token);

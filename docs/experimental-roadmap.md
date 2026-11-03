@@ -27,6 +27,8 @@ The [preservation documentation](https://github.com/duplainmedia/netcrate/issues
 
 ## Remaining work
 
-[Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
+The 0.2.0 guided setup redesign adds software review and progress, clearer required actions, local or clipboard recovery export, paste-based recovery and automatic private-network pairing. Both identity comparisons remain required. Temporary setup reception and its firewall lease are separate from the persistent backup endpoint. See [the approved design](superpowers/specs/2026-11-03-guided-setup-design.md).
+
+[Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the redesigned setup on the source computer and NCS Tower with disposable data. Cover fresh and separate accounts, actual dependency downloads, alternate-administrator elevation, both code comparisons, automatic exchange and manual fallback, reboot/sign-in, disconnected storage, changed network addresses, interruption and independent recovery. Verify temporary firewall cleanup after closing setup and after abrupt shutdown. Record actual results before recommending important-file use.
 
 Both accounts must remain signed in. Health checks cover metadata and structure rather than every stored byte. Retention has a finite preview limit and preserves media and unresolved dependencies. Automatic certificate renewal and rotation are not implemented.

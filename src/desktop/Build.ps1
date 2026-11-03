@@ -26,6 +26,7 @@ $models = @($settings, $store, $state) + @('AppModel.cs', 'ProgressModel.cs', 'V
 Build-Test 'AppTests' ($models + (Join-Path $PSScriptRoot 'AppTests.cs'))
 Build-Test 'GuidedModelTests' ($models + (Join-Path $repo 'tests\desktop\GuidedModelTests.cs')) @((Join-Path $TestRoot ('G-' + [guid]::NewGuid().ToString('N').Substring(0, 8))))
 Build-Test 'SetupTests' @($state, $service, (Join-Path $PSScriptRoot 'setup\SetupController.cs'), (Join-Path $repo 'tests\desktop\SetupTests.cs'))
+Build-Test 'SoftwareConsentTests' @($state, $service, (Join-Path $PSScriptRoot 'setup\SetupController.cs'), (Join-Path $repo 'tests\desktop\SoftwareConsentTests.cs'))
 $inspection = Join-Path $PSScriptRoot 'setup\InspectionProcess.cs'
 Build-Test 'SetupStorageTests' @($state, $store, $service, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $repo 'tests\desktop\SetupStorageTests.cs')) @($TestRoot, (Join-Path $repo 'install'))
 Build-Test 'SettingsTests' @($settings, $state, $store, (Join-Path $repo 'tests\desktop\SettingsTests.cs')) @($TestRoot)
@@ -45,6 +46,7 @@ $sources = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' -File | Whe
 $sources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filter '*.cs' -File | Select-Object -ExpandProperty FullName)
 $viewSources = @((Join-Path $PSScriptRoot 'Theme.cs'), (Join-Path $PSScriptRoot 'RestoreView.cs')) + @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filter '*.cs' -File | Select-Object -ExpandProperty FullName)
 Build-Test 'SetupViewTests' ($viewSources + (Join-Path $repo 'tests\desktop\SetupViewTests.cs')) @() $references
+Build-Test 'WizardFlowTests' ($viewSources + (Join-Path $repo 'tests\desktop\WizardFlowTests.cs')) @() $references
 Build-Test 'ScheduleViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'ScheduleView.cs'), (Join-Path $repo 'tests\desktop\ScheduleViewTests.cs'))) @($TestRoot) $references
 Build-Test 'MaintenanceViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'MaintenanceView.cs'), (Join-Path $repo 'tests\desktop\MaintenanceViewTests.cs'))) @() $references
 Build-Test 'RestoreViewTests' @($state, (Join-Path $PSScriptRoot 'RestoreView.cs'), (Join-Path $repo 'tests\desktop\RestoreViewTests.cs')) @() $references
@@ -62,7 +64,9 @@ $generatedManifest = Join-Path $output 'NetCrate.manifest'
 $manifest.Save($generatedManifest)
 $sources += $metadata
 $app = Join-Path $output 'NetCrate.exe'
-& $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$generatedManifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources
+$networkManifest = & (Join-Path $PSScriptRoot 'Build-NetworkSetupManifest.ps1') -Repo $repo -OutputPath (Join-Path $output 'NetworkSetupTrust.txt')
+$networkResource = '/resource:' + $networkManifest + ',NetCrate.NetworkSetupTrust'
+& $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$generatedManifest" "/win32icon:$PSScriptRoot\NetCrate.ico" $networkResource @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'Windows app compilation failed.' }
 foreach ($document in @('VERSION', 'CHANGELOG.md')) { Copy-Item -LiteralPath (Join-Path $repo $document) -Destination $output -Force }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NetCrate.ico') -Destination $output -Force

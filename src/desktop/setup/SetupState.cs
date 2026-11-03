@@ -18,6 +18,8 @@ namespace NetCrate.Setup
         public bool Prepared { get; set; }
         public bool RecoveryExported { get; set; }
         public bool RecoveryConfirmed { get; set; }
+        public bool RecoveryLocalOnly { get; set; }
+        public string RecoverySavedPath { get; set; }
         public bool Connected { get; set; }
         public bool SampleVerified { get; set; }
 
@@ -51,6 +53,10 @@ namespace NetCrate.Setup
         public IList<ScheduleItem> Schedules { get; set; }
         public MaintenanceStatus Maintenance { get; set; }
         public string OperationId { get; set; }
+        public SoftwarePreparationPlan PreparationPlan { get; set; }
+        public string NetworkPlanId { get; set; }
+        public bool NetworkInstalled { get; set; }
+        public string NetworkVersion { get; set; }
 
         private SetupResult(bool succeeded, string code, string message)
         {
@@ -140,6 +146,30 @@ namespace NetCrate.Setup
         public string Purpose { get; set; }
         public string Version { get; set; }
         public bool Available { get; set; }
+        public string Scope { get; set; }
+        public string Destination { get; set; }
+        public string Status { get; set; }
+        public string Source { get; set; }
+        public string License { get; set; }
+        public string SHA256 { get; set; }
+        public string Executable { get; set; }
+        public string CacheStatus { get; set; }
+    }
+    public sealed class SoftwarePreparationPlan {
+        public int Version { get; set; }
+        public string PlanId { get; set; }
+        public SoftwareCheck[] Packages { get; set; }
+        public SoftwareCheck[] Changes { get; set; }
+        public string ApplicationVersion { get; set; }
+        public bool ApplicationUpdateNeeded { get; set; }
+    }
+    public sealed class SoftwareProgress {
+        public string Name { get; set; }
+        public string Scope { get; set; }
+        public string Version { get; set; }
+        public string Phase { get; set; }
+        public int Completed { get; set; }
+        public int Total { get; set; }
     }
 
     public interface ISetupStore

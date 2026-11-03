@@ -6,7 +6,7 @@ Build on Windows x64 with .NET Framework 4.8:
 .\src\desktop\Build.ps1
 ```
 
-The build runs desktop model, setup controller, persistence, folder, timeout and accessibility checks. `build\NetCrate.exe` opens setup if this Windows account has no completed NetCrate settings. The build folder includes the backend scripts and a generated sample clip. Preparation starts only after the user selects it.
+The build runs desktop model, setup controller, software consent, persistence, folder, timeout, wizard and accessibility checks. `build\NetCrate.exe` opens setup if this Windows account has no completed NetCrate settings. The build folder includes the backend scripts. Software planning runs before bootstrap acquisition; preparation requires approval of the current plan.
 
 Normal users follow [setup](setup.md). They do not run development commands or edit configuration files.
 
@@ -16,11 +16,15 @@ Normal users follow [setup](setup.md). They do not run development commands or e
 
 The app stores its owned engine under `%LOCALAPPDATA%\NetCrate\Engine`. It keeps a separate installation identity, current-user DPAPI records, pinned tool distributions, repository bindings and durable job state. The two repositories have independently generated passwords. The backup endpoint uses TLS 1.3, bcrypt authentication, private repositories and append-only access. A scoped Windows Firewall rule permits the paired editing address only.
 
-Pairing uses signed public requests and encrypted replies bound to both installation identities. Manual device and connection code comparisons precede credential activation. Connection checks verify the actual repository identities and a signed acknowledgement. Network sign-in uses NetBird's own UI.
+Pairing uses signed public requests and encrypted replies bound to both installation identities. Automatic exchange preserves both device and connection code comparisons before credential activation. Connection checks verify the actual repository identities and a signed acknowledgement. Optional NetBird sign-in uses its own UI.
+
+Setup transport listens temporarily on TCP 8201 at an explicitly selected private IPv4 address. A private owner pipe and process job control its helper. An approved firewall lease permits only the selected peer and expires after 15 minutes. The desktop embeds hashes of the helper's executable inputs at build time, verifies the pinned PowerShell distribution and constructs the elevation command itself. The persistent append-only backup endpoint on TCP 8200 remains a separate operation. Build the complete package together; substituting helper scripts breaks its trust checks.
+
+Recovery export and paste use a separate bounded channel. Recovery keys do not enter generic setup results, progress or command arguments. Clipboard copies disable Windows history and cloud inclusion and expire after two minutes if still owned. The paste recovery context keeps the complete compatible document in memory.
 
 One owned task runs under the installing Windows account when it is signed in. It resumes at sign-in after a reboot. It does not run as SYSTEM or claim signed-out service operation. Development tests do not register this task or alter an installed deployment.
 
-The active entry points are `install/Invoke-SetupAction.ps1`, `src/shared/Invoke-NetCrateRuntime.ps1` and `src/worker/netcrate_media.py`. Older imported source and worker scripts are retained as reference while migration and compatibility checks continue. They are not called by guided installation.
+The active entry points are `install/Invoke-SetupAction.ps1`, `install/Invoke-NetworkSetupHost.ps1`, `install/Invoke-RecoveryTransfer.ps1`, `src/shared/Invoke-NetCrateRuntime.ps1` and `src/worker/netcrate_media.py`. Older imported source and worker scripts are retained as reference while migration and compatibility checks continue. They are not called by guided installation.
 
 ## Media and delivery
 
@@ -46,4 +50,6 @@ Run shared configuration, protocol, pairing and dependency tests with PowerShell
 
 `tests/worker` and the older source helper tests cover inherited media and protocol behavior. They are regression checks, separate from fresh installation acceptance.
 
-Before public release, verify on two separate Windows computers: fresh-account installation, NetBird sign-in, firewall approval, file exchange, sample delivery, a real project, offline resume, sign-in after reboot and recovery with the saved file under a fresh account. A localhost fixture does not establish those results.
+`Test-SoftwarePlan.ps1` and `Test-SetupConsent.ps1` cover read-only planning and stale approval under Windows PowerShell 5.1. Pairing fixtures under `tests/pairing` cover framing, session renewal, helper ownership, tampered helper rejection and the complete exchange. `Test-SetupLease.ps1` simulates firewall actions. `Test-NetworkDesktop.ps1` and `Test-NetworkExchange.ps1` accept `-ToolsRoot <private Tools folder>`. `Test-RecoveryTransferDesktop.ps1` accepts explicit pinned PowerShell and Restic paths and tests generated recovery data without touching the live clipboard.
+
+Before public release, verify on two separate Windows computers: fresh-account installation, software review, optional NetBird sign-in, both firewall approvals, automatic pairing and code comparisons, manual fallback, sample delivery, a real backup, offline resume, sign-in after reboot and recovery with a saved or pasted document under a fresh account. Also test alternate-administrator UAC and abrupt shutdown during pairing. A localhost fixture does not establish those results.

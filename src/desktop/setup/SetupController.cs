@@ -10,6 +10,7 @@ namespace NetCrate.Setup
         private readonly ISetupService service;
         private readonly ISetupStore store;
         private SetupState lastSaved;
+        private long softwareRun;
 
         public SetupState State { get; private set; }
         public SetupResult LastResult { get; private set; }
@@ -18,6 +19,10 @@ namespace NetCrate.Setup
         public string ProgressMessage { get; private set; }
         public string PairingCode { get; private set; }
         public string PairingStage { get; private set; }
+        public SoftwarePreparationPlan PreparationPlan { get; private set; }
+        public bool SoftwareAccepted { get; private set; }
+        public System.Collections.Generic.Dictionary<string,SoftwareProgress> SoftwareProgressRows { get; private set; }
+        public bool NeedsRecovery { get { return State.Prepared && State.Role == ComputerRole.BackupServer && !State.RecoveryConfirmed && !State.RecoveryLocalOnly; } }
         public event EventHandler Changed;
 
         public SetupController(ISetupService service, ISetupStore store)
@@ -31,6 +36,7 @@ namespace NetCrate.Setup
                 : String.IsNullOrEmpty(State.Folder) ? SetupStep.Folders : SetupStep.Prepare;
             lastSaved = State.Copy();
             LastResult = SetupResult.Done("");
+            SoftwareProgressRows = new System.Collections.Generic.Dictionary<string,SoftwareProgress>();
         }
 
         public bool CanContinue
@@ -43,7 +49,7 @@ namespace NetCrate.Setup
                     case SetupStep.Computer: return State.Role != ComputerRole.None;
                     case SetupStep.Folders: return !String.IsNullOrEmpty(State.Folder);
                     case SetupStep.Prepare: return State.Prepared &&
-                        (State.Role != ComputerRole.BackupServer || State.RecoveryConfirmed);
+                        (State.Role != ComputerRole.BackupServer || State.RecoveryConfirmed || State.RecoveryLocalOnly);
                     case SetupStep.Connect: return State.Connected;
                     case SetupStep.Check: return State.Role == ComputerRole.BackupServer ? State.Connected : State.SampleVerified;
                     default: return false;
@@ -54,6 +60,45 @@ namespace NetCrate.Setup
         private void RequireIdle()
         {
             if (Busy) throw new InvalidOperationException("Wait for the current check to finish.");
+        }
+        private void InvalidateSoftwareApproval() { PreparationPlan = null; SoftwareAccepted = false; SoftwareProgressRows.Clear(); }
+        public void SetSoftwareAccepted(bool accepted) {
+            RequireIdle();
+            if (accepted && (PreparationPlan == null || String.IsNullOrEmpty(PreparationPlan.PlanId))) throw new InvalidOperationException("Review the software before approving installation.");
+            SoftwareAccepted = accepted; Notify(false);
+        }
+        public async Task ReviewSoftwareAsync(CancellationToken token) {
+            RequireIdle();
+            ISoftwarePreparationService preparation = service as ISoftwarePreparationService;
+            if (preparation == null) throw new InvalidOperationException("Software review is unavailable. Use the complete current NetCrate build.");
+            SoftwareAccepted = false;
+            State.InvalidateChecks();
+            await RunAsync(() => preparation.ReviewSoftwareAsync(State.Copy(),token),token);
+            PreparationPlan = LastResult.Succeeded ? LastResult.PreparationPlan : null;
+            Notify(false);
+        }
+        public void RecordRecoveryDelivery(string path) {
+            RequireIdle();
+            if (!State.Prepared || State.Role != ComputerRole.BackupServer) throw new InvalidOperationException("Prepare the Backup Server first.");
+            State.RecoveryExported = true; State.RecoverySavedPath = path; State.RecoveryLocalOnly = false; State.RecoveryConfirmed = false; Notify(true);
+        }
+        public void ContinueWithLocalRecovery() {
+            RequireIdle();
+            if (!State.Prepared || !State.RecoveryExported || String.IsNullOrEmpty(State.RecoverySavedPath)) throw new InvalidOperationException("Save a local recovery file first.");
+            State.RecoveryLocalOnly = true; State.RecoveryConfirmed = false; Notify(true);
+        }
+        internal void RecordNetworkVerified() {
+            RequireIdle(); RequireConnectionStep(); State.Connected = true; State.SampleVerified = false;
+            LastResult = SetupResult.Done("Both backup repositories and the connection acknowledgment were verified."); Notify(true);
+        }
+        internal void InvalidateNetworkVerification() {
+            RequireIdle(); RequireConnectionStep();
+            State.Connected=false; State.SampleVerified=false; Notify(true);
+        }
+        internal void RecordPairingReset() {
+            RequireIdle(); RequireConnectionStep();
+            PairingCode = ""; PairingStage = ""; State.Connected = false; State.SampleVerified = false;
+            LastResult=SetupResult.Done("This computer is ready for a new connection."); Notify(true);
         }
 
         private void Notify(bool save)
@@ -86,11 +131,13 @@ namespace NetCrate.Setup
                 throw new InvalidOperationException("Choose which computer you are setting up.");
             if (State.Role != role)
             {
+                InvalidateSoftwareApproval();
                 State.Role = role;
                 State.Folder = null;
                 State.NetworkAddress = null;
                 State.RecoveryExported = false;
                 State.RecoveryConfirmed = false;
+                State.RecoveryLocalOnly = false; State.RecoverySavedPath = null;
                 State.InvalidateChecks();
             }
             Notify(true);
@@ -112,8 +159,9 @@ namespace NetCrate.Setup
                 throw new InvalidOperationException("Choose folder backups or backups with media processing before preparation.");
             if (State.BackupMode != mode)
             {
+                InvalidateSoftwareApproval();
                 State.BackupMode = mode;
-                State.InvalidateChecks(); State.RecoveryExported = false; State.RecoveryConfirmed = false;
+                State.InvalidateChecks(); State.RecoveryExported = false; State.RecoveryConfirmed = false; State.RecoveryLocalOnly = false; State.RecoverySavedPath = null;
             }
             Notify(true);
         }
@@ -131,9 +179,11 @@ namespace NetCrate.Setup
             RequireIdle();
             if (State.Step != SetupStep.Folders) throw new InvalidOperationException("Return to Choose folders first.");
             State.Folder = null;
+            InvalidateSoftwareApproval();
             State.InvalidateChecks();
             State.RecoveryExported = false;
             State.RecoveryConfirmed = false;
+            State.RecoveryLocalOnly = false; State.RecoverySavedPath = null;
             await RunAsync(() => service.CheckFolderAsync(State.Role, folder, token), token);
             if (LastResult.Succeeded) State.Folder = folder;
             Notify(true);
@@ -152,12 +202,22 @@ namespace NetCrate.Setup
         {
             RequireIdle();
             if (State.Step != SetupStep.Prepare) throw new InvalidOperationException("Return to Prepare this computer first.");
+            ISoftwarePreparationService preparation = service as ISoftwarePreparationService;
+            if (preparation == null || PreparationPlan == null || !SoftwareAccepted) throw new InvalidOperationException("Review and approve the listed software before installation.");
             State.InvalidateChecks();
             IsInstalling = true;
             try
             {
-                await RunAsync(() => service.PrepareAsync(State.Copy(), Progress(), token), token);
+                long run=++softwareRun;
+                var progress = new Progress<SoftwareProgress>(row => {
+                    if (row == null || String.IsNullOrEmpty(row.Name) || run != softwareRun || !IsInstalling || token.IsCancellationRequested) return;
+                    SoftwareProgressRows[row.Scope + "|" + row.Name + " " + row.Version] = row;
+                    ProgressMessage = row.Phase + " " + row.Name + " " + row.Version;
+                    Notify(false);
+                });
+                await RunAsync(() => preparation.PrepareApprovedAsync(State.Copy(), PreparationPlan.PlanId, progress, token), token);
                 State.Prepared = LastResult.Succeeded;
+                if (LastResult.Code == "approval-needed") SoftwareAccepted = false;
                 Notify(true);
             }
             finally
@@ -188,6 +248,7 @@ namespace NetCrate.Setup
             if (confirmed && (!State.Prepared || !State.RecoveryExported))
                 throw new InvalidOperationException("Save your recovery details before confirming.");
             State.RecoveryConfirmed = confirmed;
+            if (confirmed) State.RecoveryLocalOnly = false;
             Notify(true);
         }
 
@@ -203,6 +264,7 @@ namespace NetCrate.Setup
             RequireIdle();
             RequireConnectionStep();
             State.Connected = false;
+            PairingCode = ""; PairingStage = "";
             // Importing a file is not a successful network check.
             await RunAsync(() => service.ImportConnectionAsync(State.Copy(), path, token), token);
             Notify(true);
@@ -256,6 +318,18 @@ namespace NetCrate.Setup
         {
             RequireIdle(); RequireConnectionStep();
             return RunInstallationAsync(() => service.NetworkAsync(State.Copy(), token), token);
+        }
+        public Task ReviewNetworkSoftwareAsync(CancellationToken token) {
+            RequireIdle(); RequireConnectionStep();
+            var preparation=service as ISoftwarePreparationService;
+            if(preparation==null)throw new InvalidOperationException("Network software review is unavailable.");
+            return RunAsync(()=>preparation.ReviewNetworkAsync(State.Copy(),token),token);
+        }
+        public Task OpenApprovedNetworkAsync(string planId,CancellationToken token) {
+            RequireIdle(); RequireConnectionStep();
+            var preparation=service as ISoftwarePreparationService;
+            if(preparation==null||String.IsNullOrEmpty(planId))throw new InvalidOperationException("Review the network software before continuing.");
+            return RunInstallationAsync(()=>preparation.NetworkApprovedAsync(State.Copy(),planId,token),token);
         }
 
         private async Task RunInstallationAsync(Func<Task<SetupResult>> action, CancellationToken token)

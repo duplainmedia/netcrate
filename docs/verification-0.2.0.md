@@ -1,0 +1,15 @@
+# 0.2.0 development verification
+
+On 3 November 2026, the guided setup redesign passed the full Windows desktop build and its 12 suites, including 162 wizard-flow assertions, 11 software-consent assertions and 11 role/accessibility assertions. Actual WPF renders were inspected at 1060 × 760 and 800 × 600. Required actions remain in a fixed footer while longer pages scroll.
+
+Software planning passed under Windows PowerShell 5.1 and pinned PowerShell 7.6.5. The actual PS5 bootstrap passed 20 consent assertions without acquiring software. Coverage includes stale choices, application version and executable changes, recovery-only approval, package matrices, offline reuse and progress after completed extraction. Dependency path checks passed 78 assertions under each host.
+
+The six integrated pairing fixtures passed. Generated identities exercised actual TLS framing, both code comparisons, stable encrypted replies, file fallback, competing sessions, certificate substitution rejection, repository identity checks, signed acknowledgments, expiry and listener cleanup. The real desktop helper fixture checked private pipes, process-job cancellation and rejection of modified helper/runtime files. Additional renewal and late-acknowledgment fixtures passed, including worker reset before an offline source uploads its acknowledgment and verification with the setup port closed.
+
+Recovery transfer passed native export, ordinary local save, no overwrite, overlap rejection, private permissions and complete paste-based restoration. Clipboard tests used an injected clipboard boundary to check history/cloud exclusion, expiration, ownership, busy retries and later-content preservation. They did not access the live clipboard. Existing originals recovery passed 36 assertions with native Restic and an absent source profile.
+
+Shared configuration, protocol, pairing, setup repair, source exclusion and maintenance history checks passed. Maintenance history covered 2,843 assertions. Python ran 20 tests with one inherited opt-in skip. Packaging and version checks passed for the actual 0.2.0 application and a compiled 0.2.1 fixture.
+
+Feature reviews identified and corrected installation progress/reuse, clipboard cleanup, malformed pasted documents, helper integrity, interrupted pairing, stale connection status and manual LAN address binding. Each correction has focused regression evidence. These checks use disposable Temp data and loopback repositories; firewall, task and installation-approval operations are simulated.
+
+Physical two-computer setup, real dependency acquisition on a fresh account, NetBird sign-in, actual clipboard contention, alternate-administrator UAC, firewall cleanup after abrupt shutdown, reboot/sign-in, disconnects and separate-account recovery remain acceptance work. No live firewall rules, tasks, existing backups or credentials were changed. No release or tag was created. See the [remaining test plan](experimental-roadmap.md).

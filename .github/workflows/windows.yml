@@ -29,6 +29,13 @@ jobs:
           ./tests/pairing/Test-Pairing.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Pairing"
           ./tests/installation/Test-Dependencies.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Dependencies"
           ./tests/installation/Test-DependencyPaths.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-DependencyPaths"
+          ./tests/installation/Test-SoftwarePlan.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SoftwarePlan"
+          ./tests/installation/Test-SetupConsent.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SetupConsent"
+          ./tests/pairing/Test-NetworkSetup.ps1
+          ./tests/pairing/Test-NetworkSession.ps1
+          ./tests/pairing/Test-SetupWire.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./tests/pairing/Test-SetupLease.ps1
+          if ($LASTEXITCODE) { throw 'The pairing lease checks failed.' }
           ./tests/installation/Test-SetupRepair.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Repair"
           ./tests/installation/Test-SourceMutex.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SourceMutex"
           ./tests/installation/Test-MaintenanceHistory.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-History"
@@ -55,5 +62,8 @@ jobs:
 
           ./tests/installation/Test-ReceiptRetry.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-ReceiptRetry" -ResticExe $tools.Restic -PythonExe $tools.Python -RestServerExe $tools.RestServer
           ./tests/installation/Test-OriginalsRestore.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-OriginalsRestore" -ResticExe $tools.Restic
+          ./tests/installation/Test-RecoveryTransferDesktop.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-RecoveryTransfer" -PowerShellExe $tools.PowerShell -ResticExe $tools.Restic
+          ./tests/pairing/Test-NetworkDesktop.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools"
+          ./tests/pairing/Test-NetworkExchange.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools"
           $fixture = "$env:RUNNER_TEMP/NC5-" + [guid]::NewGuid().ToString('N').Substring(0,8)
           ./tests/installation/Test-CleanupRetry.ps1 -TestRoot $fixture -ResticExe $tools.Restic -PythonExe $tools.Python -RestServerExe $tools.RestServer

@@ -9,7 +9,7 @@ using System.Web.Script.Serialization;
 
 namespace NetCrate.Setup
 {
-    public sealed class WindowsSetupService : ISetupService, IRestoreService
+    public sealed class WindowsSetupService : ISetupService, IRestoreService, ISoftwarePreparationService
     {
         private readonly string engineRoot;
         private readonly string setupRoot;
@@ -46,7 +46,7 @@ namespace NetCrate.Setup
                     full.IndexOfAny(new[] { '*', '?', '"', '<', '>', '|' }) >= 0)
                     return SetupResult.ActionRequired("choose-folder", "Choose your project or backup folder instead of a Windows folder.");
                 if (!JsonSetupStore.SafePath(full))
-                    return SetupResult.ActionRequired("linked-folder", "Choose a local folder outside a linked or cloud-managed folder.");
+                    return SetupResult.ActionRequired("linked-folder", "The selected folder or one of its parents is linked or cloud-managed: " + full + ". Choose a new folder directly inside your Windows user folder or on another connected drive.");
                 string probe = Path.Combine(full, ".netcrate-check-" + Guid.NewGuid().ToString("N"));
                 using (FileStream stream = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
                     stream.WriteByte(0);
@@ -69,25 +69,30 @@ namespace NetCrate.Setup
 
         public async Task<SetupResult> PrepareAsync(SetupState state, IProgress<string> progress, CancellationToken token)
         {
-            SetupResult folder = await CheckFolderAsync(state.Role, state.Folder, token);
-            if (!folder.Succeeded) return folder;
-            if (progress != null) progress.Report("Checking required software. Windows may ask you to approve an installation.");
-            return await InvokePreparationAsync("Prepare", state, token);
+            await Task.CompletedTask;
+            return SetupResult.ActionRequired("approval-needed", "Review and approve the listed software before installation.");
         }
 
-        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null, MaintenanceRequest maintenance = null)
+        public Task<SetupResult> ReviewSoftwareAsync(SetupState state, CancellationToken token) { return InvokePreparationAsync("ReviewSoftware",state,token); }
+        public Task<SetupResult> PrepareApprovedAsync(SetupState state,string planId,IProgress<SoftwareProgress> progress,CancellationToken token) { return InvokePreparationAsync("Prepare",state,token,acceptedPlanId:planId,softwareProgress:progress); }
+        public Task<SetupResult> ReviewNetworkAsync(SetupState state,CancellationToken token) { return InvokePreparationAsync("ReviewNetwork",state,token); }
+        public Task<SetupResult> NetworkApprovedAsync(SetupState state,string planId,CancellationToken token) { return InvokePreparationAsync("Network",state,token,acceptedPlanId:planId); }
+        public Task<SetupResult> ReviewRecoveryToolsAsync(CancellationToken token) { return InvokePreparationAsync("ReviewRecoveryTools",new SetupState(),token); }
+        public Task<SetupResult> InstallRecoveryToolsAsync(string planId,IProgress<SoftwareProgress> progress,CancellationToken token) { return InvokePreparationAsync("InstallRecoveryTools",new SetupState(),token,acceptedPlanId:planId,softwareProgress:progress); }
+
+        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null, MaintenanceRequest maintenance = null, string acceptedPlanId = null, IProgress<SoftwareProgress> softwareProgress = null)
         {
-            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule", "StorageStatus", "CheckStorage", "PreviewRetention", "ApplyRetention" };
+            string[] actions = { "ReviewSoftware", "ReviewNetwork", "ReviewRecoveryTools", "InstallRecoveryTools", "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule", "StorageStatus", "CheckStorage", "PreviewRetention", "ApplyRetention" };
             if (Array.IndexOf(actions, action) < 0) throw new ArgumentException("Unsupported action.");
             token.ThrowIfCancellationRequested();
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
             if (!File.Exists(script))
                 return SetupResult.ActionRequired("installer-missing", "The setup files are missing. Download a complete NetCrate build and try again.");
             if (!JsonSetupStore.SafePath(setupRoot))
-                return SetupResult.ActionRequired("setup-folder-linked", "The NetCrate setup folder contains a link. Check the folder before trying again.");
+                return SetupResult.ActionRequired("setup-folder-linked", "NetCrate's setup folder is linked or cloud-managed: " + setupRoot + ". Use an ordinary local Windows profile folder.");
             Directory.CreateDirectory(setupRoot);
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
-            object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }
+            object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code, AcceptedPlanId = acceptedPlanId }
                 : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor, BrowseDeadlineUtc = action == "ListBackups" || action == "ListBackupChildren" ? DateTime.UtcNow.Add(InspectionProcess.BrowseBudget).ToString("o") : null };
             if (schedule != null) payload = new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, Path = schedule.Project, TimeOfDay = schedule.TimeOfDay, Enabled = schedule.Enabled };
             if (maintenance != null) {
@@ -114,10 +119,11 @@ namespace NetCrate.Setup
                     process.Start();
                     Task<string> output = process.StandardOutput.ReadToEndAsync();
                     Task<string> errors = process.StandardError.ReadToEndAsync();
+                    Task progressTask = WatchSoftwareProgressAsync(process,input + ".progress.json",softwareProgress);
                     // Finish the package manager operation before allowing another attempt.
                     // Cancelling an installer process can leave its child installer running.
                     // Recovery also waits through native verification/publication and owned staging cleanup.
-                    if (action != "Prepare" && action != "Network" && action != "ConfirmConnection" && action != "RestoreSelection")
+                    if (action != "Prepare" && action != "InstallRecoveryTools" && action != "Network" && action != "ConfirmConnection" && action != "RestoreSelection")
                     {
                         bool finished = await InspectionProcess.WaitAsync(process, InspectionProcess.TimeoutFor(action), token);
                         if (!finished) {
@@ -129,6 +135,7 @@ namespace NetCrate.Setup
                     else await Task.Run(() => process.WaitForExit());
                     string text = await output;
                     await errors;
+                    await progressTask;
                     if (action != "RestoreSelection") token.ThrowIfCancellationRequested();
                     Dictionary<string, object> record = json.DeserializeObject(text.Trim()) as Dictionary<string, object>;
                     if (record == null || !record.ContainsKey("Succeeded") || !record.ContainsKey("Message"))
@@ -138,6 +145,14 @@ namespace NetCrate.Setup
                         : SetupResult.ActionRequired(Convert.ToString(record["Code"]), Convert.ToString(record["Message"]));
                     object value;
                     if (record.TryGetValue("OperationId", out value)) result.OperationId = Convert.ToString(value);
+                    if (record.TryGetValue("PreparationPlan", out value) && value != null) {
+                        result.PreparationPlan = json.ConvertToType<SoftwarePreparationPlan>(value);
+                        if (result.PreparationPlan.Version != 1 || result.PreparationPlan.Packages == null || result.PreparationPlan.Packages.Length > 16 ||
+                            !System.Text.RegularExpressions.Regex.IsMatch(result.PreparationPlan.PlanId ?? "", "^[a-f0-9]{64}$")) throw new InvalidDataException("Invalid software plan.");
+                    }
+                    if (record.TryGetValue("NetworkPlanId", out value)) result.NetworkPlanId = Convert.ToString(value);
+                    if (record.TryGetValue("NetworkInstalled", out value)) result.NetworkInstalled = value is bool && (bool)value;
+                    if (record.TryGetValue("NetworkVersion", out value)) result.NetworkVersion = Convert.ToString(value);
                     if (record.TryGetValue("PairingCode", out value)) result.PairingCode = Convert.ToString(value);
                     if (record.TryGetValue("PairingStage", out value)) result.PairingStage = Convert.ToString(value);
                     if (record.TryGetValue("NextCursor", out value)) result.NextCursor = Convert.ToString(value);
@@ -164,12 +179,39 @@ namespace NetCrate.Setup
                             Dictionary<string, object> data = item as Dictionary<string, object>;
                             if (data == null) continue;
                             result.Software.Add(new SoftwareCheck { Name = Convert.ToString(data["Name"]), Purpose = Convert.ToString(data["Purpose"]),
-                                Version = Convert.ToString(data["Version"]), Available = data["Available"] is bool && (bool)data["Available"] });
+                                Version = Convert.ToString(data["Version"]), Available = data["Available"] is bool && (bool)data["Available"],
+                                Source = data.ContainsKey("Source") ? Convert.ToString(data["Source"]) : "", License = data.ContainsKey("License") ? Convert.ToString(data["License"]) : "",
+                                Scope = data.ContainsKey("Scope") ? Convert.ToString(data["Scope"]) : "", Destination = data.ContainsKey("Destination") ? Convert.ToString(data["Destination"]) : "" });
                         }
                     return result;
                 }
             }
-            finally { if (File.Exists(input)) File.Delete(input); }
+            finally { if (File.Exists(input)) File.Delete(input); if (File.Exists(input + ".progress.json")) File.Delete(input + ".progress.json"); }
+        }
+
+        private async Task WatchSoftwareProgressAsync(Process process,string path,IProgress<SoftwareProgress> progress) {
+            if (progress == null) return;
+            Dictionary<string,string> seen=new Dictionary<string,string>();
+            do {
+                try {
+                    if (File.Exists(path) && JsonSetupStore.SafePath(path) && new FileInfo(path).Length <= 32768) {
+                        var data=json.DeserializeObject(File.ReadAllText(path,Encoding.UTF8)) as Dictionary<string,object>;
+                        object rows;
+                        if (data != null && data.TryGetValue("Rows",out rows) && rows is object[] && ((object[])rows).Length <= 16) {
+                            foreach(object item in (object[])rows) {
+                                SoftwareProgress row=json.ConvertToType<SoftwareProgress>(item);
+                                if (Array.IndexOf(new[]{"Bootstrap","Runtime","Setup"},row.Scope)<0 || !System.Text.RegularExpressions.Regex.IsMatch(row.Name ?? "","^[A-Za-z][A-Za-z0-9 ]{0,49}$") ||
+                                    !System.Text.RegularExpressions.Regex.IsMatch(row.Version ?? "","^[0-9]+(\\.[0-9]+){1,3}$") ||
+                                    Array.IndexOf(new[]{"Checking","Downloading","Verifying","Extracting","Ready","Reused","Failed"},row.Phase)<0 || row.Completed<0 || row.Completed>64 || row.Total<1 || row.Total>64) continue;
+                                string key=row.Scope+"|"+row.Name+"|"+row.Version, signature=row.Phase+"|"+row.Completed+"|"+row.Total, old;
+                                if (!seen.TryGetValue(key,out old)||old!=signature){seen[key]=signature;progress.Report(row);}
+                            }
+                        }
+                    }
+                } catch(IOException) { } catch(UnauthorizedAccessException) { } catch(ArgumentException) { } catch(InvalidOperationException) { }
+                if (process.HasExited) break;
+                await Task.Delay(200).ConfigureAwait(false);
+            } while(true);
         }
 
         public Task<SetupResult> InvokeRestoreAsync(string action, RestoreRequest request, CancellationToken token) {

@@ -51,10 +51,10 @@ class SetupTests
         setup.Continue();
         Assert(setup.State.Step == SetupStep.Prepare, "A valid folder did not advance.");
         service.PrepareResult = SetupResult.ActionRequired("approval-denied", "Windows approval was declined. Choose Try again when you are ready.");
-        await setup.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(setup, CancellationToken.None);
         Assert(!setup.State.Prepared && !setup.CanContinue, "Declined approval was treated as preparation success.");
         service.PrepareResult = SetupResult.Done("Required software is available.");
-        await setup.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(setup, CancellationToken.None);
         Assert(setup.State.Prepared && setup.CanContinue, "Successful preparation did not unlock connection.");
         Reject(()=>setup.ChooseBackupMode("Media"),"Mode changed after preparation without returning to folder choices.");
         setup.Continue();
@@ -93,7 +93,7 @@ class SetupTests
         Assert(resumed.State.Folder == null, "Changing roles reused the editing folder as backup storage.");
         await resumed.ChooseFolderAsync(@"G:\Backup Storage", CancellationToken.None);
         resumed.Continue();
-        await resumed.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(resumed, CancellationToken.None);
         Assert(!resumed.CanContinue, "A backup server skipped independent recovery details.");
         service.RecoveryResult = SetupResult.ActionRequired("save-cancelled", "Choose where to save recovery details.");
         await resumed.SaveRecoveryAsync("cancelled", CancellationToken.None);
@@ -119,14 +119,14 @@ class SetupTests
         await interrupted.ChooseFolderAsync(@"F:\Video Projects", CancellationToken.None);
         interrupted.Continue();
         interruptedService.ThrowOnPrepare = true;
-        await interrupted.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(interrupted, CancellationToken.None);
         Assert(!interrupted.Busy && !interrupted.State.Prepared && interrupted.LastResult.Code == "operation-failed",
             "An interrupted installation retained success or left the controls stuck.");
         interruptedService.ThrowOnPrepare = false;
-        await interrupted.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(interrupted, CancellationToken.None);
         Assert(interrupted.State.Prepared, "Retry after interruption did not recover.");
         interruptedService.WaitOnPrepare = new TaskCompletionSource<SetupResult>();
-        Task pending = interrupted.PrepareAsync(CancellationToken.None);
+        Task pending = PrepareReviewed(interrupted, CancellationToken.None);
         Assert(interrupted.Busy, "Preparation did not lock setup choices.");
         Reject(() => interrupted.ChooseComputer(ComputerRole.BackupServer), "The role changed during installation.");
         Reject(() => interrupted.Back(), "Navigation changed during installation.");
@@ -134,7 +134,7 @@ class SetupTests
         await pending;
         CancellationTokenSource cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        await interrupted.PrepareAsync(cancelled.Token);
+        await PrepareReviewed(interrupted, cancelled.Token);
         Assert(!interrupted.Busy && !interrupted.State.Prepared, "Cancellation left a prepared checkpoint.");
 
         FailingStore failingStore = new FailingStore();
@@ -151,7 +151,7 @@ class SetupTests
         recheck.Continue();
         await recheck.ChooseFolderAsync(@"F:\Video Projects", CancellationToken.None);
         recheck.Continue();
-        await recheck.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(recheck, CancellationToken.None);
         recheck.Continue();
         recheck.Back();
         recheckService.PrepareResult = SetupResult.ActionRequired("software-missing", "Required software is no longer available.");
@@ -159,7 +159,7 @@ class SetupTests
         Assert(!recheck.State.Prepared && !recheck.State.Connected && !recheck.CanContinue,
             "Returning to preparation and failing its recheck retained the old preparation proof.");
         recheckService.PrepareResult = SetupResult.Done("Software checked.");
-        await recheck.PrepareAsync(CancellationToken.None);
+        await PrepareReviewed(recheck, CancellationToken.None);
         await recheck.InspectAsync(cancelled.Token);
         Assert(!recheck.State.Prepared && !recheck.CanContinue, "Cancelling a recheck retained preparation proof.");
     }
@@ -177,7 +177,13 @@ class SetupTests
         public void Save(SetupState state) { throw new IOException("Synthetic full disk."); }
     }
 
-    private class FakeSetupService : ISetupService
+    private static async Task PrepareReviewed(SetupController setup, CancellationToken token) {
+        await setup.ReviewSoftwareAsync(token);
+        if (setup.PreparationPlan == null) return;
+        setup.SetSoftwareAccepted(true);
+        await setup.PrepareAsync(token);
+    }
+    private class FakeSetupService : ISetupService, ISoftwarePreparationService
     {
         public SetupResult FolderResult = SetupResult.Done("Folder checked.");
         public SetupResult PrepareResult = SetupResult.Done("Software checked.");
@@ -186,6 +192,14 @@ class SetupTests
         public SetupResult SampleResult = SetupResult.Done("Sample verified.");
         public bool ThrowOnPrepare;
         public TaskCompletionSource<SetupResult> WaitOnPrepare;
+        public Task<SetupResult> ReviewSoftwareAsync(SetupState state,CancellationToken token) {
+            var result=SetupResult.Done("Review private tools.");
+            result.PreparationPlan=new SoftwarePreparationPlan {Version=1,PlanId=new string('a',64),Packages=new SoftwareCheck[0],Changes=new SoftwareCheck[0]};
+            return Task.FromResult(result);
+        }
+        public Task<SetupResult> PrepareApprovedAsync(SetupState state,string plan,IProgress<SoftwareProgress> progress,CancellationToken token) {return PrepareAsync(state,null,token);}
+        public Task<SetupResult> ReviewNetworkAsync(SetupState state,CancellationToken token) {return Task.FromResult(SetupResult.Done("Review."));}
+        public Task<SetupResult> NetworkApprovedAsync(SetupState state,string plan,CancellationToken token) {return NetworkAsync(state,token);}
 
         public Task<SetupResult> CheckFolderAsync(ComputerRole role, string folder, CancellationToken token)
         { return Task.FromResult(FolderResult); }
