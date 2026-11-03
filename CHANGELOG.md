@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased (0.1.2 development)
+## Unreleased (0.1.3 development)
 
+- Recovery bootstrap supports deep tool paths in Windows PowerShell 5.1.
 - Maintenance history retires harmless failures while preserving recovery journals.
 - The repository page displays the NetCrate logo.
 - Backup success requires a recovery receipt.

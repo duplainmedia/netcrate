@@ -21,9 +21,11 @@ The [preservation documentation](https://github.com/duplainmedia/netcrate/issues
 
 [Focused verification](verification-0.1.2.md) covers history admission, journal preservation, native cleanup, the desktop build and versioned packaging.
 
-## Remaining work
+## Addressed in 0.1.3 development
 
-[Recovery bootstrap extraction](https://github.com/duplainmedia/netcrate/issues/13) failed under Windows PowerShell 5.1 at a 266-character path during NCS validation of 0.1.1. A shorter-root rerun passed; the product limitation remains unfixed. Reproduce through the actual bootstrap and add long/short-path regressions while preserving archive and permission checks.
+[Recovery bootstrap extraction](https://github.com/duplainmedia/netcrate/issues/13) uses validated extended paths for Windows PowerShell 5.1 file I/O. [Focused verification](verification-0.1.3.md) covers short/long roots, the actual recovery bridge, archive checks, link rejection and private permissions.
+
+## Remaining work
 
 [Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
 

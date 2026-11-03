@@ -16,18 +16,19 @@ function Get-NetCratePackageArchive {
     $url = [uri]$Package.Url
     if ($Package.SHA256 -cnotmatch '^[a-f0-9]{64}$' -or $url.Scheme -cne 'https' -or $url.UserInfo -or
         $url.Host -cnotin @('github.com', 'www.python.org', 'files.pythonhosted.org')) { throw 'The software download entry is invalid.' }
-    $null = [IO.Directory]::CreateDirectory($root)
+    $null = [IO.Directory]::CreateDirectory((ConvertTo-NetCrateFileSystemPath $root))
     $path = [IO.Path]::Combine($root, $Package.SHA256 + '.package')
-    if ([IO.File]::Exists($path)) {
-        if ((Get-FileHash -LiteralPath $path).Hash -ieq $Package.SHA256) { return $path }
-        [IO.File]::Move($path, $path + '.rejected-' + [guid]::NewGuid().ToString('N'))
+    $nativePath = ConvertTo-NetCrateFileSystemPath $path
+    if ([IO.File]::Exists($nativePath)) {
+        if ((Get-FileHash -LiteralPath $nativePath).Hash -ieq $Package.SHA256) { return $path }
+        [IO.File]::Move($nativePath, (ConvertTo-NetCrateFileSystemPath ($path + '.rejected-' + [guid]::NewGuid().ToString('N'))))
     }
-    $temporary = [IO.Path]::Combine($root, [guid]::NewGuid().ToString('N') + '.download')
+    $temporary = ConvertTo-NetCrateFileSystemPath ([IO.Path]::Combine($root, [guid]::NewGuid().ToString('N') + '.download'))
     $client = [Net.WebClient]::new()
     try {
         $client.DownloadFile($url, $temporary)
         if ((Get-FileHash -LiteralPath $temporary).Hash -ine $Package.SHA256) { throw 'The software download could not be verified. Try again.' }
-        [IO.File]::Move($temporary, $path)
+        [IO.File]::Move($temporary, $nativePath)
         return $path
     } finally {
         $client.Dispose()
@@ -38,14 +39,16 @@ function Get-NetCratePackageArchive {
 function Expand-NetCrateDependency {
     param([Parameter(Mandatory)][string]$Archive, [Parameter(Mandatory)]$Package, [Parameter(Mandatory)][string]$ToolsRoot)
     $root = Assert-NetCrateLocalPath $ToolsRoot
+    $nativeArchive = ConvertTo-NetCrateFileSystemPath $Archive
     if ($Package.Name -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,30}$' -or $Package.Version -cnotmatch '^[0-9]+(\.[0-9]+){1,3}$' -or
-        $Package.SHA256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $Archive).Hash -ine $Package.SHA256) {
+        $Package.SHA256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $nativeArchive).Hash -ine $Package.SHA256) {
         throw 'The software archive failed its identity check.'
     }
     $null = Assert-NetCrateRelativePath $Package.Executable
     $destination = [IO.Path]::Combine($root, $Package.Name, $Package.Version)
+    $nativeDestination = ConvertTo-NetCrateFileSystemPath $destination
     $stampPath = [IO.Path]::Combine($destination, '.netcrate-package.json')
-    if ([IO.Directory]::Exists($destination)) {
+    if ([IO.Directory]::Exists($nativeDestination)) {
         $stamp = Read-NetCrateJson $stampPath -MaximumBytes 1048576
         if ($stamp.Version -ne 1 -or $stamp.Name -cne $Package.Name -or $stamp.PackageVersion -cne $Package.Version -or
             $stamp.ArchiveSHA256 -cne $Package.SHA256) { throw 'An existing software folder has a different identity. Its files were preserved.' }
@@ -53,19 +56,20 @@ function Expand-NetCrateDependency {
         foreach ($file in $stamp.Files) {
             $null = Assert-NetCrateRelativePath $file.Path
             $path = [IO.Path]::Combine($destination, $file.Path.Replace('/', '\'))
-            $null = Assert-NetCrateLocalPath $path
-            if (-not [IO.File]::Exists($path) -or (Get-FileHash -LiteralPath $path).Hash -ine $file.SHA256) { $damaged = $true }
+            $nativePath = ConvertTo-NetCrateFileSystemPath $path
+            if (-not [IO.File]::Exists($nativePath) -or (Get-FileHash -LiteralPath $nativePath).Hash -ine $file.SHA256) { $damaged = $true }
         }
         if (-not $damaged) { return $destination }
         $preserved = $destination + '.damaged-' + [guid]::NewGuid().ToString('N')
         $null = Assert-NetCrateLocalPath $preserved
         if (-not $preserved.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'The repair destination is outside the owned tools folder.' }
-        [IO.Directory]::Move($destination, $preserved)
+        [IO.Directory]::Move($nativeDestination, (ConvertTo-NetCrateFileSystemPath $preserved))
     }
-    $null = [IO.Directory]::CreateDirectory($root)
+    $null = [IO.Directory]::CreateDirectory((ConvertTo-NetCrateFileSystemPath $root))
     $stage = [IO.Path]::Combine($root, '.stage-' + [guid]::NewGuid().ToString('N'))
-    $null = [IO.Directory]::CreateDirectory($stage)
-    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    $nativeStage = ConvertTo-NetCrateFileSystemPath $stage
+    $null = [IO.Directory]::CreateDirectory($nativeStage)
+    $zip = [IO.Compression.ZipFile]::OpenRead($nativeArchive)
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $files = [Collections.Generic.List[object]]::new()
     $total = [long]0
@@ -80,20 +84,21 @@ function Expand-NetCrateDependency {
             }
             $target = [IO.Path]::GetFullPath([IO.Path]::Combine($stage, $relative.Replace('/', '\')))
             if (-not $target.StartsWith($stage + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'The software archive path is outside its installation folder.' }
+            $nativeTarget = ConvertTo-NetCrateFileSystemPath $target
             $total += $entry.Length
             if ($total -gt 2GB) { throw 'The software archive is larger than expected.' }
-            if ($entry.FullName.EndsWith('/')) { $null = [IO.Directory]::CreateDirectory($target); continue }
-            $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
-            $files.Add([pscustomobject]@{ Path = $relative; SHA256 = (Get-FileHash -LiteralPath $target).Hash.ToLowerInvariant() })
+            if ($entry.FullName.EndsWith('/')) { $null = [IO.Directory]::CreateDirectory($nativeTarget); continue }
+            $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($nativeTarget))
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $nativeTarget, $false)
+            $files.Add([pscustomobject]@{ Path = $relative; SHA256 = (Get-FileHash -LiteralPath $nativeTarget).Hash.ToLowerInvariant() })
         }
     } finally { $zip.Dispose() }
-    if (-not [IO.File]::Exists([IO.Path]::Combine($stage, $Package.Executable.Replace('/', '\')))) { throw 'The expected software file is missing from the archive.' }
+    if (-not [IO.File]::Exists((ConvertTo-NetCrateFileSystemPath ([IO.Path]::Combine($stage, $Package.Executable.Replace('/', '\')))))) { throw 'The expected software file is missing from the archive.' }
     Write-NetCrateJson ([IO.Path]::Combine($stage, '.netcrate-package.json')) ([ordered]@{
         Version = 1; Name = $Package.Name; PackageVersion = $Package.Version; ArchiveSHA256 = $Package.SHA256; Files = @($files.ToArray())
     })
-    $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
-    [IO.Directory]::Move($stage, $destination)
+    $null = [IO.Directory]::CreateDirectory((ConvertTo-NetCrateFileSystemPath ([IO.Path]::GetDirectoryName($destination))))
+    [IO.Directory]::Move($nativeStage, $nativeDestination)
     return $destination
 }
 
