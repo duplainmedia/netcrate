@@ -151,6 +151,7 @@ foreach ($caseRoot in @($fixture.LongRoot,(Join-Path $TestRoot 'Short'))) {
         $badRoot = Join-Path (Join-Path $caseRoot 'Unsafe') ([IO.Path]::GetFileNameWithoutExtension($bad.Path))
         Reject { Expand-NetCrateDependency $bad.Path $package $badRoot }
         Assert (-not [IO.Directory]::Exists((NativePath (Join-Path $badRoot 'Fixture/1.0')))) 'Unsafe archive was published.'
+        Assert (-not [IO.File]::Exists((NativePath (Join-Path $badRoot 'escaped.txt')))) 'Traversal escaped its staging directory.'
     }
 }
 Assert ($fixture.Link.Length -gt 260) 'Linked ancestor fixture did not cross the legacy limit.'
@@ -167,5 +168,4 @@ foreach ($badPath in @(
 }
 Assert ([IO.File]::ReadAllText((Join-Path $fixture.Outside 'sentinel.txt')) -ceq 'preserved') 'Linked destination bytes changed.'
 Assert (@([IO.Directory]::GetFileSystemEntries($fixture.Outside)).Count -eq 1) 'A linked destination received files.'
-Assert (-not [IO.File]::Exists((Join-Path $TestRoot 'escaped.txt'))) 'Traversal escaped its staging directory.'
 Write-Output ('PASS: PowerShell '+$PSVersionTable.PSVersion+' '+$script:assertions+' dependency, JSON, repair, link and permission assertions.')
