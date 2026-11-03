@@ -1,8 +1,8 @@
 # Reliability fix continuation
 
-> **For agentic workers:** Resume the interrupted final fix wave with one implementation owner and one scoped re-review. Use the systematic-debugging and test-driven-development skills. The user explicitly authorized autonomous execution without oversight.
+> **For agentic workers:** Resume the interrupted repair with one implementation owner and scoped reviews. Use the systematic-debugging and test-driven-development skills. The user explicitly authorized autonomous execution without oversight.
 
-**Goal:** Resolve open issues 2, 3, 4, 5, 6 and 7, verify the resulting build, and prepare a follow-up PR.
+**Goal:** Resolve open issues 2, 3, 4, 5, 6 and 7, add consistent application versioning and a public changelog, verify the resulting build, and prepare a follow-up PR.
 
 **Architecture:** Keep the existing WPF, PowerShell and Restic implementation. Preserve early originals checkpoints, but distinguish them from positively receipted completion. Recovery, queue projection and notifications must agree. A deliberate cleanup retry must operate only on a verified prior forget and never repeat an ambiguous forget.
 
@@ -55,7 +55,14 @@ This continues the prior interrupted fix wave rather than splitting shared queue
 
 ## Integration
 
+Before integration, implement the user's added versioning request as a separate task. Use root `VERSION` containing `0.1.1` as the single source for three-part app/product versions and four-part Windows metadata ending in `.0`. Generate assembly attributes and the Win32 manifest rather than maintaining duplicate version literals. The older untagged assembly label `1.1.1.0` and manifest label `1.0.0.0` are normalized to the experimental sequence; no previous release or tag is invented.
+
+Include `VERSION` and concise public `CHANGELOG.md` in the package and installed copy. Keep work under Unreleased until publication, then use a dated version entry. Derive the visible app title, `NetCrate-0.1.1-Windows-x64.zip` filename and CI artifact from the same source; keep the existing unversioned ZIP alias for compatibility. Packaging must reject an executable with stale assembly, file, informational or embedded-manifest metadata. Validate release tag names against `v` plus `VERSION` without creating tags or releases. Data/protocol versions and dependency pins remain separate.
+
+The guarded versioning integration fixture must inspect actual compiled metadata and ZIP contents, reject a stale fixture executable and an independently mismatched embedded manifest, reject malformed/out-of-range version inputs, and preserve the repository's real source/build during mutation tests. Versioning gets its own implementation report and scoped review. One product writer at a time.
+
 - [ ] Generate a fix-only package from the merged-main base to the implementation head. Have the original final reviewer verify all five Important findings, the date-display Minor and new breakage in this fix diff.
+- [ ] Resolve load-bearing findings from that review with focused failing regressions and scoped follow-up review. In particular, ambiguous older receipt records, stage-based cleanup eligibility and a later request after an immutable pending snapshot must remain safe.
 - [ ] Run the controller's combined native verification once against stable product code, including any added regression fixtures and the existing foreground-window retention test. Verify the ZIP contents against the executable and runtime sources.
 - [ ] Update the experimental roadmap, README and verification record to describe actual resolved and remaining work. Link the six issues from the follow-up PR without closing them before merge.
 - [ ] Push the feature branch, prepare the PR, inspect GitHub checks and report its actual status. Leave physical-machine acceptance, merge and visibility changes to the user.
