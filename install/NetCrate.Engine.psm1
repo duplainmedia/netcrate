@@ -7,6 +7,8 @@ foreach ($name in @('Configuration', 'Credentials', 'Pairing', 'Protocol', 'Proc
 Import-Module (Join-Path $PSScriptRoot 'NetCrate.Dependencies.psm1')
 Import-Module (Join-Path $PSScriptRoot 'NetCrate.Repositories.psm1')
 
+. (Join-Path $PSScriptRoot 'NetCrate.SetupPairing.ps1')
+
 function Get-NetCratePrivateAddress {
     $addresses = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object {
         $_.OperationalStatus -eq 'Up' -and ($_.Name -match 'NetBird|wt0' -or $_.Description -match 'NetBird')
@@ -35,18 +37,8 @@ function Resolve-NetCrateNetworkAddress($State) {
     return Get-NetCratePrivateAddress
 }
 
-function Initialize-NetCrateEndpoint {
-    param([string]$Root, [string]$Address, [string]$SourceAddress, $Tools, [switch]$Fixture, [int]$Port = 8200)
-    if (-not $Fixture) { Assert-NetCratePrivateAddress $Address; Assert-NetCratePrivateAddress $SourceAddress; if ($Port -ne 8200) { throw 'Unsupported backup port.' } }
-    elseif ($Address -cne '127.0.0.1' -or $SourceAddress -cne '127.0.0.1') { throw 'Fixtures must use loopback.' }
-    $owner = Get-NetCrateOwner $Root
-    $path = [IO.Path]::Combine($Root, 'endpoint.json')
-    if ([IO.File]::Exists($path)) {
-        $endpoint = Read-NetCrateJson $path
-        if ($endpoint.Address -cne $Address -or $endpoint.SourceAddress -cne $SourceAddress) { throw 'The private network address changed. Existing keys were preserved. Reconnect NetBird before trying again.' }
-        return $endpoint
-    }
-    $null = Set-NetCratePrivateDirectory ([IO.Path]::Combine($Root, 'TLS'))
+function Get-NetCrateSetupTlsIdentity([string]$Root,[string]$Address) {
+    $owner=Get-NetCrateOwner $Root
     $keyPath = [IO.Path]::Combine($Root, 'Secrets', 'tls-identity.json')
     if ([IO.File]::Exists($keyPath)) { $tls = Unprotect-NetCrateRecord $Root 'tls-identity' }
     else {
@@ -64,6 +56,22 @@ function Initialize-NetCrateEndpoint {
         } finally { $rsa.Dispose() }
     }
     if ($tls.Address -cne $Address) { throw 'The saved certificate uses another private address.' }
+    return $tls
+}
+
+function Initialize-NetCrateEndpoint {
+    param([string]$Root, [string]$Address, [string]$SourceAddress, $Tools, [switch]$Fixture, [int]$Port = 8200)
+    if (-not $Fixture) { Assert-NetCratePrivateAddress $Address; Assert-NetCratePrivateAddress $SourceAddress; if ($Port -ne 8200) { throw 'Unsupported backup port.' } }
+    elseif ($Address -cne '127.0.0.1' -or $SourceAddress -cne '127.0.0.1') { throw 'Fixtures must use loopback.' }
+    $owner = Get-NetCrateOwner $Root
+    $path = [IO.Path]::Combine($Root, 'endpoint.json')
+    if ([IO.File]::Exists($path)) {
+        $endpoint = Read-NetCrateJson $path
+        if ($endpoint.Address -cne $Address -or $endpoint.SourceAddress -cne $SourceAddress) { throw 'The private network address changed. Existing keys were preserved. Reconnect NetBird before trying again.' }
+        return $endpoint
+    }
+    $null = Set-NetCratePrivateDirectory ([IO.Path]::Combine($Root, 'TLS'))
+    $tls=Get-NetCrateSetupTlsIdentity $Root $Address
     [IO.File]::WriteAllText([IO.Path]::Combine($Root, 'TLS', 'server.pem'), $tls.Certificate)
     [IO.File]::WriteAllText([IO.Path]::Combine($Root, 'TLS', 'server-key.pem'), $tls.PrivateKey)
     $secret = Get-NetCrateRepositorySecrets $Root
@@ -144,7 +152,7 @@ function Get-NetCrateInstallerCache([string]$Root) {
     return $path
 }
 
-function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot) {
+function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot, [scriptblock]$Progress) {
     $mode = Get-NetCrateBackupMode $State
     $folder = Assert-NetCrateLocalPath $State.Folder
     if ($Root.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
@@ -158,7 +166,7 @@ function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot) {
         $prior = Read-NetCrateJson $preparedPath
         if (-not $prior.Folder.Equals($State.Folder,[StringComparison]::OrdinalIgnoreCase) -or (Get-NetCrateBackupMode $prior) -cne $mode) { throw 'This installation already uses another folder or backup mode. Its files were preserved.' }
     }
-    $tools = Install-NetCrateTools $role $Root -BackupMode $mode
+    $tools = Install-NetCrateTools $role $Root -BackupMode $mode -Progress $Progress
     Write-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json')) $tools
     if ($role -ceq 'Worker') { $null = Initialize-NetCrateRepositories $Root $State.Folder $tools.Restic }
     $app = [IO.Path]::Combine($Root, 'App')
@@ -200,10 +208,41 @@ function Test-NetCrateConnectionPayload($Payload, $Request, $Reply) {
     if ($Payload.TransportPassword.Length -lt 40 -or $Payload.Repositories.Primary.Id -ceq $Payload.Repositories.Results.Id) { throw 'The private backup login is invalid.' }
 }
 
+function Get-NetCrateStableReply($Root) {
+    $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
+    Assert-NetCrateLiveWire $pending.Request
+    $activated=Get-NetCratePairingRecord $Root pairing-activated
+    if(-not $pending.Confirmed -or -not $activated -or $activated.RequestId -cne $pending.Request.RequestId){throw 'Confirm the editing device and finish allowing its backup connection first.'}
+    $cache=Get-NetCratePairingRecord $Root outbound-reply
+    if($cache -and $cache.Request.RequestId -ceq $pending.Request.RequestId){Assert-NetCrateLiveWire $cache.Reply; return $cache.Reply}
+    $owner=Get-NetCrateOwner $Root
+    $endpoint = Read-NetCrateJson ([IO.Path]::Combine($Root, 'endpoint.json'))
+    $repos = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))
+    $secret = Get-NetCrateRepositorySecrets $Root
+    $remote = @{}
+    foreach ($name in @('Primary', 'Results')) {
+        $leaf = if ($name -ceq 'Primary') { 'originals' } else { 'results' }
+        $remote[$name] = @{ Uri = ('rest:https://' + $endpoint.Address + ':8200/editing/' + $leaf + '/'); Id = $repos.($name + 'Id') }
+    }
+    $payload = @{ SourceId = $pending.Request.RecipientId; ServerId = $owner.InstallationId; RequestId = $pending.Request.RequestId
+        SourceComputer = $pending.Request.SourceComputer; ProjectRoot = $pending.Request.ProjectRoot; WorkerComputer = $env:COMPUTERNAME
+        Address = $endpoint.Address; Certificate = $endpoint.Certificate; CertificateSHA256 = $endpoint.CertificateSHA256; Repositories = $remote
+        PrimaryPassword = $secret.PrimaryPassword; ResultsPassword = $secret.ResultsPassword; TransportPassword = $secret.TransportPassword }
+    return New-NetCratePairingReply $Root $payload
+}
+
 function Invoke-NetCrateSetupAction {
-    param([string]$Action, $State, [string]$Root, [string]$AppRoot)
+    param([string]$Action, $State, [string]$Root, [string]$AppRoot, [scriptblock]$Progress)
+    if($Action -cin @('ManualPairingStatus','ExportConnection','ImportConnection','ConfirmConnection','CheckConnection')){
+        return Invoke-NetCratePairingLock $Root { Invoke-NetCrateSetupActionCore $Action $State $Root $AppRoot $Progress }
+    }
+    return Invoke-NetCrateSetupActionCore $Action $State $Root $AppRoot $Progress
+}
+
+function Invoke-NetCrateSetupActionCore {
+    param([string]$Action, $State, [string]$Root, [string]$AppRoot, [scriptblock]$Progress)
     $message = ''; $code = ''; $stage = ''
-    if ($Action -ceq 'Prepare') { Initialize-NetCrateComputer $Root $State $AppRoot; $message = 'This computer is prepared. Tasks run while you are signed in to Windows.' }
+    if ($Action -ceq 'Prepare') { Initialize-NetCrateComputer $Root $State $AppRoot $Progress; $message = 'This computer is prepared. Tasks run while you are signed in to Windows.' }
     elseif ($Action -ceq 'Inspect') {
         $ready = [IO.File]::Exists([IO.Path]::Combine($Root, 'prepared.json'))
         if (-not $ready) { return @{ Succeeded = $false; Code = 'prepare-needed'; Message = 'Choose Prepare this computer to install the required software.' } }
@@ -225,6 +264,7 @@ function Invoke-NetCrateSetupAction {
         if ($owner.Role -cne $expectedRole -or $prepared.Role -cne $expectedRole -or (Get-NetCrateBackupMode $State) -cne (Get-NetCrateBackupMode $prepared) -or -not $prepared.Folder.Equals($State.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The setup choices differ from this prepared installation.' }
         $tools = Read-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json'))
         switch -Exact ($Action) {
+            'ManualPairingStatus' {return Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role}
             'Network' {
                 $exe = [IO.Path]::Combine($env:ProgramFiles, 'NetBird', 'netbird-ui.exe')
                 if (-not [IO.File]::Exists($exe)) {
@@ -239,39 +279,37 @@ function Invoke-NetCrateSetupAction {
             'SaveRecovery' { Export-NetCrateRecovery $Root $State.Path; $message = 'Recovery details were saved. Keep a copy on another computer or removable drive.' }
             'ExportConnection' {
                 if ($owner.Role -ceq 'Source') {
-                    $wire = New-NetCratePairingRequest $Root $env:COMPUTERNAME $prepared.Folder (Resolve-NetCrateNetworkAddress $State) -BackupMode (Get-NetCrateBackupMode $prepared)
+                    $wire = Get-NetCrateStableRequest $Root $prepared.Folder (Resolve-NetCrateNetworkAddress $State) (Get-NetCrateBackupMode $prepared)
                     $code = $wire.DeviceCode; $stage = 'RequestSaved'; $message = 'Open this file on the Backup Server. Compare the device code shown there with this code.'
                 } else {
-                    $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
-                    $endpoint = Read-NetCrateJson ([IO.Path]::Combine($Root, 'endpoint.json'))
-                    $repos = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))
-                    $secret = Get-NetCrateRepositorySecrets $Root
-                    $remote = @{}
-                    foreach ($name in @('Primary', 'Results')) {
-                        $leaf = if ($name -ceq 'Primary') { 'originals' } else { 'results' }
-                        $remote[$name] = @{ Uri = ('rest:https://' + $endpoint.Address + ':8200/editing/' + $leaf + '/'); Id = $repos.($name + 'Id') }
-                    }
-                    $payload = @{ SourceId = $pending.Request.RecipientId; ServerId = $owner.InstallationId; RequestId = $pending.Request.RequestId
-                        SourceComputer = $pending.Request.SourceComputer; ProjectRoot = $pending.Request.ProjectRoot; WorkerComputer = $env:COMPUTERNAME
-                        Address = $endpoint.Address; Certificate = $endpoint.Certificate; CertificateSHA256 = $endpoint.CertificateSHA256; Repositories = $remote
-                        PrimaryPassword = $secret.PrimaryPassword; ResultsPassword = $secret.ResultsPassword; TransportPassword = $secret.TransportPassword }
-                    $wire = New-NetCratePairingReply $Root $payload
+                    $wire = Get-NetCrateStableReply $Root
                     $code = $wire.ConnectionCode; $stage = 'ReplySaved'; $message = 'Open this reply on the Editing Computer. Compare the connection code shown there with this code.'
                 }
                 $target = Assert-NetCrateLocalPath $State.Path
                 $bytes = [Text.Encoding]::UTF8.GetBytes(($wire | ConvertTo-Json -Depth 24))
                 $file = [IO.FileStream]::new($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
                 try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
+                if($owner.Role -ceq 'Worker'){Protect-NetCrateRecord $Root manual-reply-saved @{RequestId=$wire.RequestId}}
             }
             'ImportConnection' {
                 $wire = Read-NetCrateJson $State.Path -MaximumBytes 131072
-                if ($owner.Role -ceq 'Source') { $result = Import-NetCratePairingReply $Root $wire; $code = $result.ConnectionCode; $stage = 'ReplyImported' }
-                else { $result = Import-NetCratePairingRequest $Root $wire -BackupMode (Get-NetCrateBackupMode $prepared); $code = $result.DeviceCode; $stage = 'RequestImported' }
+                if ($owner.Role -ceq 'Source') { $result = Receive-NetCrateStableReply $Root $wire; $code = $result.ConnectionCode; $stage = 'ReplyImported' }
+                else {
+                    $local=Resolve-NetCrateNetworkAddress $State
+                    $result = Receive-NetCrateStableRequest $Root $wire (Get-NetCrateBackupMode $prepared) ''
+                    Protect-NetCrateRecord $Root manual-selection @{RequestId=$result.RequestId;LocalAddress=$local}
+                    return Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role
+                }
                 $message = 'Compare this code with the code on your other computer. Choose Codes match only if they are identical.'
             }
             'ConfirmConnection' {
                 if ($owner.Role -ceq 'Worker') {
                     $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
+                    $current=Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role
+                    if($current.PairingStage -cin @('RequestConfirmed','ReplySaved')){
+                        if($State.PairingCode -cne $pending.Request.DeviceCode){throw 'Compare the current device code on both computers.'}
+                        return $current
+                    }
                     Confirm-NetCratePairingRequest $Root $pending.Request.RequestId $State.PairingCode
                     $endpoint = Initialize-NetCrateEndpoint $Root (Resolve-NetCrateNetworkAddress $State) $pending.Request.NetworkAddress $tools
                     $repos = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))
@@ -287,17 +325,20 @@ function Invoke-NetCrateSetupAction {
                     $process = Start-Process -FilePath $launch.FilePath -ArgumentList $launch.Arguments -Verb RunAs -WindowStyle Hidden -PassThru -Wait
                     if ($process.ExitCode -ne 0) { throw 'Windows did not allow the private backup connection. Choose Codes match to try again.' }
                     Set-NetCrateOwnedTasks $Root $tools
+                    Protect-NetCrateRecord $Root 'pairing-activated' @{RequestId=$pending.Request.RequestId}
                     $stage = 'RequestConfirmed'; $message = 'Save the reply file, then open it on the Editing Computer.'
                 } else {
                     $pending = Unprotect-NetCrateRecord $Root 'pending-reply'
                     $request = (Unprotect-NetCrateRecord $Root 'outbound-request').Request
                     Test-NetCrateConnectionPayload $pending.Payload $request $pending.Reply
+                    Assert-NetCrateNetworkProof $Root $pending.Payload $request
                     $null = Confirm-NetCratePairingReply $Root $State.PairingCode
                     $settings = New-NetCrateRuntimeSettings $Root $prepared $request $pending.Payload.WorkerComputer $pending.Payload.Repositories $tools
                     Protect-NetCrateRecord $Root 'runtime-peer' @{ PublicKey = $pending.Reply.ServerPublicKey }
                     [IO.File]::WriteAllText([IO.Path]::Combine($Root, 'server.pem'), $pending.Payload.Certificate)
                     Write-NetCrateJson ([IO.Path]::Combine($Root, 'settings.json')) $settings
                     Set-NetCrateOwnedTasks $Root $tools
+                    Protect-NetCrateRecord $Root 'pairing-activated' @{RequestId=$request.RequestId}
                     $stage = 'Paired'; $message = 'The codes were accepted. Choose Check connection.'
                 }
             }
@@ -313,10 +354,7 @@ function Invoke-NetCrateSetupAction {
                     Write-WorkflowRecord $Root $settings pairing-ack (Get-NetCrateHash $peer.Request.RequestId) $ack
                 } else {
                     $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
-                    $acks = @(Read-WorkflowRecords $Root $settings pairing-ack $settings.SourceComputer | Where-Object {
-                        $_.Version -eq 1 -and $_.Kind -ceq 'pairing-ack' -and $_.RequestId -ceq $pending.Request.RequestId -and $_.SourceId -ceq $pending.Request.RecipientId -and $_.ServerId -ceq $owner.InstallationId
-                    })
-                    if (-not $acks.Count) { throw 'On the Editing Computer, compare the connection code and choose Check connection. Then try again here.' }
+                    if (-not (Test-NetCrateWorkerAcknowledgment $Root $settings $pending)) { throw 'On the Editing Computer, compare the connection code and choose Check connection. Then try again here.' }
                 }
                 $message = 'Both backup repositories are connected.'
             }
@@ -348,3 +386,5 @@ function Invoke-NetCrateSetupAction {
 
 Export-ModuleMember -Function Get-NetCratePrivateAddress, Assert-NetCratePrivateAddress, Initialize-NetCrateEndpoint,
     Get-NetCrateServerArguments, Invoke-NetCrateSetupAction, Test-NetCrateConnectionPayload, Get-NetCrateTaskLaunch, Get-NetCrateFirewallLaunch, Copy-NetCrateApplication, Get-NetCrateInstallerCache
+
+Export-ModuleMember -Function Get-NetCrateSetupTlsIdentity,Invoke-NetCratePairingLock,Get-NetCratePairingRecord,Get-NetCrateStableRequest,Receive-NetCrateStableRequest,Get-NetCrateStableReply,Receive-NetCrateStableReply,Assert-NetCratePresentedCertificate,Reset-NetCratePendingPairing,Get-NetCrateWorkerPairingSettings,Resolve-NetCrateNetworkAddress

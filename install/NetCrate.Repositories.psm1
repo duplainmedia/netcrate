@@ -63,19 +63,42 @@ function Initialize-NetCrateRepositories {
     return [pscustomobject]$binding
 }
 
-function Export-NetCrateRecovery {
-    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$LiteralPath)
+function Get-NetCrateRecoveryDocument {
+    param([Parameter(Mandatory)][string]$Root)
     $owner = Get-NetCrateOwner $Root
+    if ($owner.Role -cne 'Worker') { throw 'Export recovery details on the Backup Server.' }
     $binding = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))
     $secrets = Get-NetCrateRepositorySecrets $Root
-    $path = Assert-NetCrateLocalPath $LiteralPath
-    foreach ($forbidden in @($owner.Root, $binding.StorageRoot)) {
-        if ($path.StartsWith($forbidden.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Save recovery details outside NetCrate and the backup drive folder.' }
-    }
+    if ($binding.InstallationId -cne $owner.InstallationId -or $binding.PrimaryId -cnotmatch '^[a-f0-9]{64}$' -or $binding.ResultsId -cnotmatch '^[a-f0-9]{64}$' -or
+        $binding.PrimaryId -ceq $binding.ResultsId -or -not $secrets.PrimaryPassword -or -not $secrets.ResultsPassword) { throw 'The recovery keys do not match this Backup Server.' }
     $recovery = [ordered]@{ Version = 1; Kind = 'netcrate-recovery'; InstallationId = $owner.InstallationId; CreatedUtc = [DateTime]::UtcNow.ToString('o')
         Primary = @{ Id = $binding.PrimaryId; Path = $binding.PrimaryPath; Password = $secrets.PrimaryPassword }
         Results = @{ Id = $binding.ResultsId; Path = $binding.ResultsPath; Password = $secrets.ResultsPassword }
-        Instructions = 'Keep this file on another computer or removable drive. It unlocks your backups. Restore using Restic and the repository password even if NetCrate or the original Windows account is unavailable.' }
+        Instructions = 'Keep a separate accessible copy outside this computer. These details unlock your backups. Restore using Restic and the repository password even if NetCrate or the original Windows account is unavailable.' }
+    return ($recovery | ConvertTo-Json -Depth 8)
+}
+
+function Export-NetCrateRecovery {
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$LiteralPath)
+    $document = Get-NetCrateRecoveryDocument $Root
+    $owner = Get-NetCrateOwner $Root
+    $binding = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))
+    $path = Assert-NetCrateLocalPath $LiteralPath
+    foreach ($forbidden in @($owner.Root, $binding.StorageRoot, [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')))) {
+        $other = $forbidden.TrimEnd('\')
+        if ($path.Equals($other, [StringComparison]::OrdinalIgnoreCase) -or $path.StartsWith($other + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            $other.StartsWith($path + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Save recovery details outside NetCrate and the selected backup folder.' }
+    }
+    foreach ($cloud in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+        if ($cloud -and ($path.Equals($cloud.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -or $path.StartsWith($cloud.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase))) { throw 'Choose an ordinary local folder outside OneDrive.' }
+    }
+    $part = [IO.Path]::GetDirectoryName($path)
+    if (-not [IO.Directory]::Exists($part)) { throw 'Choose an existing ordinary local folder for recovery details.' }
+    while ($part) {
+        if (([IO.File]::GetAttributes($part) -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { throw 'Choose a fully available ordinary local folder without links.' }
+        $part = [IO.Path]::GetDirectoryName($part.TrimEnd('\'))
+    }
+    if ([IO.File]::Exists($path) -or [IO.Directory]::Exists($path)) { throw 'That destination already exists. Choose a new recovery filename; the existing file was preserved.' }
     $acl = [Security.AccessControl.FileSecurity]::new()
         $acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
         $acl.SetAccessRuleProtection($true, $false)
@@ -85,11 +108,11 @@ function Export-NetCrateRecovery {
     $stream = [IO.FileSystemAclExtensions]::Create([IO.FileInfo]::new($path), [IO.FileMode]::CreateNew,
         [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $acl)
     try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(($recovery | ConvertTo-Json -Depth 8))
+        $bytes = [Text.Encoding]::UTF8.GetBytes($document)
         try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) }
         finally { [Array]::Clear($bytes, 0, $bytes.Length) }
     } finally { $stream.Dispose() }
     Write-NetCrateJson ([IO.Path]::Combine($Root, 'recovery-export.json')) @{ Version = 1; ExportedUtc = [DateTime]::UtcNow.ToString('o'); PrimaryId = $binding.PrimaryId; ResultsId = $binding.ResultsId }
 }
 
-Export-ModuleMember -Function Initialize-NetCrateRepositories, Get-NetCrateRepositorySecrets, Export-NetCrateRecovery
+Export-ModuleMember -Function Initialize-NetCrateRepositories, Get-NetCrateRepositorySecrets, Get-NetCrateRecoveryDocument, Export-NetCrateRecovery

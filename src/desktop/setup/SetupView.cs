@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -16,7 +16,7 @@ using Forms = System.Windows.Forms;
 
 namespace NetCrate.Setup
 {
-    public sealed class SetupView : Window
+    public sealed partial class SetupView : Window
     {
         private readonly SetupController controller;
         private readonly IRestoreService restoreService;
@@ -24,14 +24,16 @@ namespace NetCrate.Setup
         private readonly Dictionary<string, Control> controls = new Dictionary<string, Control>();
         private bool checkingSoftware;
         private CancellationTokenSource checkCancellation;
-        private bool closeAfterCheck;
         private readonly BitmapSource logo;
         public bool SetupCompleted { get; private set; }
         private CancellationToken CheckToken { get { return checkCancellation == null ? CancellationToken.None : checkCancellation.Token; } }
 
-        public SetupView(SetupController controller, IRestoreService restoreService = null)
+        public SetupView(SetupController controller, IRestoreService restoreService = null, INetworkPairingService networkService = null, IRecoveryTransferService recoveryService = null)
         {
             this.controller = controller;
+            localAddress = controller.State.NetworkAddress ?? "";
+            this.networkService = networkService ?? new WindowsNetworkPairingService(InstallDirectory, SetupDirectory);
+            this.recoveryService = recoveryService;
             this.restoreService = restoreService ?? new WindowsSetupService(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "install"));
             Title = "Set up NetCrate";
             Width = 1060;
@@ -58,21 +60,11 @@ namespace NetCrate.Setup
             shell.Background = Theme.Brush(Theme.Background);
             InstallStyles();
             controller.Changed += OnChanged;
-            Closed += delegate { controller.Changed -= OnChanged; };
-            Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
-            {
-                if (controller.Busy)
-                {
-                    args.Cancel = true;
-                    if (!controller.IsInstalling && checkCancellation != null)
-                    {
-                        closeAfterCheck = true;
-                        checkCancellation.Cancel();
-                    }
-                }
-            };
+            Closed += delegate { controller.Changed -= OnChanged; this.networkService.Dispose(); if (clipboard != null) clipboard.Dispose(); };
+            Closing += OnClosing;
             SourceInitialized += delegate
             {
+                clipboard = new RecoveryClipboardLifetime(new WindowsRecoveryClipboard(new System.Windows.Interop.WindowInteropHelper(this).Handle), new DispatcherRecoveryExpiryScheduler());
                 try
                 {
                     int enabled = 1;
@@ -83,7 +75,7 @@ namespace NetCrate.Setup
             };
             Loaded += async delegate
             {
-                if (controller.State.Step == SetupStep.Prepare) await InspectAsync();
+                await EnterStepAsync();
                 FocusFirst();
             };
             Render();
@@ -91,7 +83,6 @@ namespace NetCrate.Setup
 
         private void OnChanged(object sender, EventArgs args)
         {
-            if (closeAfterCheck && !controller.Busy) { Dispatcher.BeginInvoke(new Action(Close)); return; }
             if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(new Action(Render)); return; }
             Render();
         }
@@ -126,7 +117,8 @@ namespace NetCrate.Setup
         private Button Button(string name, Action action, bool primary)
         {
             Button button = new Button { Content = name, HorizontalContentAlignment = HorizontalAlignment.Center,
-                Background = Theme.Brush(primary ? Theme.Primary : Theme.Raised), IsEnabled = !controller.Busy };
+                Background = Theme.Brush(primary ? Theme.Primary : Theme.Raised), IsEnabled = !controller.Busy && !viewBusy };
+            button.Tag = primary ? "Primary" : "Secondary";
             AutomationProperties.SetName(button, name.Replace("_", ""));
             controls[name.Replace("_", "")] = button;
             button.Click += delegate
@@ -160,23 +152,24 @@ namespace NetCrate.Setup
             {
                 case SetupStep.Computer: ComputerScreen(content); break;
                 case SetupStep.Folders: FolderScreen(content); break;
-                case SetupStep.Prepare: PrepareScreen(content); break;
+                case SetupStep.Prepare: if (recoveryPage) RecoveryScreen(content); else PrepareScreen(content); break;
                 case SetupStep.Connect: ConnectScreen(content); break;
                 case SetupStep.Check: CheckScreen(content); break;
                 case SetupStep.Complete: CompleteScreen(content); break;
             }
-            if (controller.Busy || !String.IsNullOrEmpty(controller.LastResult.Message))
+            if (controller.Busy || viewBusy || !String.IsNullOrEmpty(controller.LastResult.Message))
             {
                 Border status = new Border { Background = Theme.Brush(Theme.Raised), BorderBrush = Theme.Brush(Theme.Border),
                     BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7), Padding = new Thickness(15), Margin = new Thickness(0, 22, 0, 0) };
                 StackPanel lines = new StackPanel();
                 status.Child = lines;
-                lines.Children.Add(Text(controller.Busy ? controller.ProgressMessage : controller.LastResult.Message, 13,
-                    controller.Busy || controller.LastResult.Succeeded ? Theme.Muted : Theme.Warning));
-                if (controller.Busy) lines.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 3, Foreground = Theme.Brush(Theme.Accent),
+                lines.Children.Add(Text(viewBusy ? "Completing this action. Keep setup open until it finishes." : controller.Busy ? controller.ProgressMessage : controller.LastResult.Message, 13,
+                    controller.Busy || viewBusy || controller.LastResult.Succeeded ? Theme.Muted : Theme.Warning));
+                if (controller.Busy || viewBusy) lines.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 3, Foreground = Theme.Brush(Theme.Accent),
                     Background = Theme.Brush(Theme.Border), Margin = new Thickness(0, 12, 0, 0) });
                 content.Children.Add(status);
             }
+            if (!String.IsNullOrEmpty(viewMessage)) { var message=Text(viewMessage,13,Theme.Warning); message.Margin=new Thickness(0,18,0,0);content.Children.Add(message); }
             BuildFooter(main);
             Control restore;
             if (!String.IsNullOrEmpty(focused) && controls.TryGetValue(focused, out restore) && restore.IsEnabled) restore.Focus();
@@ -204,14 +197,21 @@ namespace NetCrate.Setup
             dock.Children.Add(note);
             StackPanel steps = new StackPanel();
             dock.Children.Add(steps);
-            string[] names = { "This computer", "Folders", "Preparation", "Connection", "Sample check" };
+            string[] names = controller.State.Role == ComputerRole.BackupServer
+                ? new[] { "This computer", "Folders", "Software", "Recovery", "Connection", "Sample check" }
+                : new[] { "This computer", "Folders", "Software", "Connection", "Sample check" };
+            int current = (int)controller.State.Step;
+            if (controller.State.Role == ComputerRole.BackupServer && current >= 3) current++;
+            if (controller.State.Step == SetupStep.Prepare && recoveryPage) current=3;
             for (int index = 0; index < names.Length; index++)
             {
-                bool selected = Math.Min(4, (int)controller.State.Step) == index;
-                Border row = new Border { Background = Theme.Brush(selected ? Theme.Selected : Theme.Surface), CornerRadius = new CornerRadius(6),
-                    Padding = new Thickness(11, 12, 8, 12), Margin = new Thickness(-8, 0, -8, 8) };
-                row.Child = Text((index + 1) + "   " + names[index], 13, selected ? Theme.Text : Theme.Muted);
-                steps.Children.Add(row);
+                bool selected = current == index;
+                bool completed = index < current;
+                if(controller.State.Role==ComputerRole.BackupServer&&index==names.Length-1&&!controller.State.SampleVerified){completed=false;if(controller.State.Step==SetupStep.Complete)selected=false;}
+                string state = completed ? "Completed" : selected ? "Current" : "Waiting";
+                Border row = new Border { Background = Theme.Brush(selected ? Theme.Selected : Theme.Surface), CornerRadius = new CornerRadius(6), Padding = new Thickness(11,10,8,10), Margin = new Thickness(-8,0,-8,6) };
+                row.Child = Text((completed ? "✓  " : (index+1)+"  ") + names[index] + "\n" + state,12,selected ? Theme.Text : Theme.Muted);
+                AutomationProperties.SetName(row,names[index]+": "+state);steps.Children.Add(row);
             }
         }
 
@@ -235,14 +235,15 @@ namespace NetCrate.Setup
             Heading(panel, "Which computer is this?", null);
             panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "Stores the files you want to back up.", "\uE770"));
             panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "Stores backups on its connected drive.", "\uE977"));
-            panel.Children.Add(Button("Recover from a recovery file", () => NetCrate.RestoreView.OpenRecovery(this, restoreService), false));
+            panel.Children.Add(Button("Recover from a recovery file",async () => await OpenIndependentRecoveryAsync(false),false));
+            var paste=Button("Paste recovery details",async () => await OpenIndependentRecoveryAsync(true),false);paste.Margin=new Thickness(0,10,0,0);panel.Children.Add(paste);
             FlowDiagram(panel);
         }
 
         private RadioButton RoleCard(ComputerRole role, string title, string description, string glyph)
         {
             RadioButton card = new RadioButton { GroupName = "ComputerRole", IsChecked = controller.State.Role == role,
-                IsEnabled = !controller.Busy };
+                IsEnabled = !controller.Busy && !viewBusy };
             AutomationProperties.SetName(card, title);
             AutomationProperties.SetHelpText(card, description);
             controls[title] = card;
@@ -320,9 +321,9 @@ namespace NetCrate.Setup
             StackPanel contents = new StackPanel();
             choice.Child = contents;
             contents.Children.Add(Text(editing ? (media ? "Project folder" : "Files to back up") : "Backup storage", 13, Theme.Muted));
-            TextBlock path = Text(String.IsNullOrEmpty(controller.State.Folder) ? "No folder selected" : controller.State.Folder, 17, Theme.Text);
-            path.Margin = new Thickness(0, 9, 0, 18);
-            contents.Children.Add(path);
+            TextBox path=Input("Full folder path",folderDraft ?? controller.State.Folder ?? "");
+            path.Margin=new Thickness(0,9,0,12);path.TextChanged += delegate { folderDraft=path.Text; UpdateFooter(); };contents.Children.Add(path);
+            contents.Children.Add(Text("Enter a full local path, or choose a folder. The selected path and its ancestors are validated before continuing.",12,Theme.Muted));
             Button pick = Button("_Choose folder", PickFolder, false);
             pick.HorizontalAlignment = HorizontalAlignment.Left;
             contents.Children.Add(pick);
@@ -350,226 +351,17 @@ namespace NetCrate.Setup
             {
                 picker.Description = controller.State.Role == ComputerRole.EditingComputer ? (controller.State.BackupMode == "Media" ? "Choose the folder containing your video projects" : "Choose a folder containing your files") : "Choose backup storage";
                 picker.ShowNewFolderButton = true;
+                picker.RootFolder=Environment.SpecialFolder.MyComputer;picker.SelectedPath=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 if (!String.IsNullOrEmpty(controller.State.Folder)) picker.SelectedPath = controller.State.Folder;
                 if (picker.ShowDialog(new WindowOwner(new System.Windows.Interop.WindowInteropHelper(this).Handle)) == Forms.DialogResult.OK)
-                    await RunSafeAsync(() => controller.ChooseFolderAsync(picker.SelectedPath, CheckToken));
+                { folderDraft=picker.SelectedPath; await RunSafeAsync(() => controller.ChooseFolderAsync(picker.SelectedPath, CheckToken)); }
             }
         }
 
-        private void PrepareScreen(StackPanel panel)
-        {
-            Heading(panel, "Prepare this computer", "NetCrate checks the software it needs and installs missing supported tools. Windows may ask for your approval.");
-            foreach (SoftwareCheck check in controller.LastResult.Software)
-            {
-                Border row = new Border { Background = Theme.Brush(Theme.Surface), BorderBrush = Theme.Brush(Theme.Border), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(15, 12, 15, 12), Margin = new Thickness(0, 0, 0, 8) };
-                StackPanel words = new StackPanel();
-                row.Child = words;
-                words.Children.Add(Text(check.Name + (check.Available ? "  \u00B7  Found" : "  \u00B7  Needed"), 14, Theme.Text));
-                words.Children.Add(Text(check.Purpose, 12, Theme.Muted));
-                panel.Children.Add(row);
-            }
-            bool retryCheck = controller.LastResult.Code == "probe-timeout" || controller.LastResult.Code == "cancelled" ||
-                controller.LastResult.Code == "operation-failed" || controller.LastResult.Code == "installer-missing";
-            Button prepare = Button(retryCheck ? "Try again" : controller.State.Prepared ? "Check again" : "_Prepare this computer",
-                async () => await RunSafeAsync(() => retryCheck ? controller.InspectAsync(CheckToken) : controller.PrepareAsync(CheckToken)), true);
-            prepare.HorizontalAlignment = HorizontalAlignment.Left;
-            prepare.Margin = new Thickness(0, 12, 0, 0);
-            panel.Children.Add(prepare);
-            Expander details = new Expander { Header = "Software details", Foreground = Theme.Brush(Theme.Muted), Margin = new Thickness(0, 16, 0, 0),
-                Content = Text("NetCrate installs its tools for your Windows account and verifies each download. Restic encrypts backups. FFmpeg creates proxies. Python and Pillow create contact sheets. Tasks resume when you sign in to Windows. Read THIRD-PARTY.md for software licenses.", 12, Theme.Muted) };
-            panel.Children.Add(details);
-            if (controller.State.Role == ComputerRole.BackupServer && controller.State.Prepared)
-            {
-                TextBlock recovery = Text("Save recovery details somewhere separate from your backup drive. You will need them if this computer fails.", 13, Theme.Muted);
-                recovery.Margin = new Thickness(0, 20, 0, 12);
-                panel.Children.Add(recovery);
-                panel.Children.Add(Button("Save recovery details", SaveRecovery, false));
-                CheckBox confirm = new CheckBox { Content = "I saved a separate copy of my recovery details", IsChecked = controller.State.RecoveryConfirmed,
-                    IsEnabled = controller.State.RecoveryExported && !controller.Busy, Foreground = Theme.Brush(Theme.Text), Margin = new Thickness(0, 14, 0, 0) };
-                confirm.Checked += delegate { try { controller.SetRecoveryConfirmed(true); } catch (IOException) { ShowSaveError(); } catch (UnauthorizedAccessException) { ShowSaveError(); } };
-                confirm.Unchecked += delegate { try { controller.SetRecoveryConfirmed(false); } catch (IOException) { ShowSaveError(); } catch (UnauthorizedAccessException) { ShowSaveError(); } };
-                panel.Children.Add(confirm);
-            }
-        }
-
-        private async Task InspectAsync()
-        {
-            if (checkingSoftware) return;
-            checkingSoftware = true;
-            try { await RunSafeAsync(() => controller.InspectAsync(CheckToken)); }
-            finally { checkingSoftware = false; }
-        }
-
-        internal static SaveFileDialog CreateRecoverySaveDialog() {
-            return new SaveFileDialog { Title = "Save recovery details", FileName = "NetCrate recovery", DefaultExt = ".netcrate", Filter = "NetCrate recovery|*.netcrate" };
-        }
-        private async void SaveRecovery()
-        {
-            SaveFileDialog picker = CreateRecoverySaveDialog();
-            if (picker.ShowDialog(this) == true)
-                await RunSafeAsync(() => controller.SaveRecoveryAsync(picker.FileName, CheckToken));
-        }
-
-        private void ConnectScreen(StackPanel panel)
-        {
-            bool editing = controller.State.Role == ComputerRole.EditingComputer;
-            Heading(panel, "Connect your computers", "Both computers need a private connection. Use NetBird, or choose an existing connection below.");
-            panel.Children.Add(Button("Recover from a recovery file", () => NetCrate.RestoreView.OpenRecovery(this, restoreService), false));
-            FlowDiagram(panel);
-            panel.Children.Add(Button("Open NetBird", async () => await RunSafeAsync(() => controller.NetworkAsync(CheckToken)), false));
-            StackPanel existing = new StackPanel();
-            existing.Children.Add(Text("Use an existing WireGuard connection, another VPN, or a local network. Enter this computer's private IPv4 address. Leave it blank to use NetBird automatically.", 12, Theme.Muted));
-            TextBox address = new TextBox { Text = controller.State.NetworkAddress ?? "", Background = Theme.Brush(Theme.Surface), Foreground = Theme.Brush(Theme.Text),
-                BorderBrush = Theme.Brush(Theme.Border), Padding = new Thickness(10), Margin = new Thickness(0, 10, 0, 8) };
-            AutomationProperties.SetName(address, "This computer's private IPv4 address");
-            existing.Children.Add(address);
-            existing.Children.Add(Button("Use this connection", () =>
-            {
-                try { controller.UseNetworkAddress(address.Text.Trim()); }
-                catch (InvalidOperationException error) { MessageBox.Show(this, error.Message, "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
-                catch (IOException) { ShowSaveError(); }
-                catch (UnauthorizedAccessException) { ShowSaveError(); }
-            }, false));
-            panel.Children.Add(new Expander { Header = "Use an existing private connection", Content = existing,
-                Foreground = Theme.Brush(Theme.Muted), Margin = new Thickness(0, 12, 0, 0) });
-            TextBlock instruction = Text(editing
-                ? "1. Save a connection file and send it to the Backup Server.\n2. On the Backup Server, open it, compare the device codes, then save a reply.\n3. Open that reply here and compare the connection codes."
-                : "1. Open the connection file from the Editing Computer.\n2. Compare the device code with the Editing Computer, then choose Codes match. Windows will ask to allow this private connection.\n3. Save a reply and send it back to the Editing Computer.", 13, Theme.Muted);
-            instruction.Margin = new Thickness(0, 18, 0, 12);
-            panel.Children.Add(instruction);
-            if (editing) panel.Children.Add(Button("Save connection file", ExportConnection, false));
-            panel.Children.Add(Button(editing ? "Open reply file" : "Open connection file", ImportConnection, false));
-            if (!String.IsNullOrEmpty(controller.PairingCode))
-            {
-                TextBox code = new TextBox { Text = controller.PairingCode, IsReadOnly = true, FontSize = 22,
-                    FontFamily = new FontFamily("Consolas"), Background = Theme.Brush(Theme.Surface), Foreground = Theme.Brush(Theme.Accent),
-                    BorderBrush = Theme.Brush(Theme.Border), Padding = new Thickness(14), Margin = new Thickness(0, 14, 0, 10) };
-                AutomationProperties.SetName(code, "Code to compare with the other computer");
-                panel.Children.Add(code);
-                if (controller.PairingStage == "RequestImported" || controller.PairingStage == "ReplyImported")
-                    panel.Children.Add(Button("Codes match", async () => await RunSafeAsync(() => controller.ConfirmConnectionAsync(controller.PairingCode, CheckToken)), true));
-            }
-            if (!editing && (controller.PairingStage == "RequestConfirmed" || controller.PairingStage == "ReplySaved"))
-                panel.Children.Add(Button("Save reply file", ExportConnection, true));
-            Button check = Button("Check connection", async () => await RunSafeAsync(() => controller.CheckConnectionAsync(CheckToken)), true);
-            check.HorizontalAlignment = HorizontalAlignment.Left;
-            check.Margin = new Thickness(0, 20, 0, 0);
-            panel.Children.Add(check);
-        }
-
-        private async void ExportConnection()
-        {
-            bool editing = controller.State.Role == ComputerRole.EditingComputer;
-            SaveFileDialog picker = new SaveFileDialog { Title = editing ? "Save connection file" : "Save reply file",
-                FileName = editing ? "NetCrate connection" : "NetCrate reply", DefaultExt = ".netcrate", Filter = "NetCrate connection|*.netcrate" };
-            if (picker.ShowDialog(this) == true)
-                await RunSafeAsync(() => controller.ExportConnectionAsync(picker.FileName, CheckToken));
-        }
-
-        private async void ImportConnection()
-        {
-            OpenFileDialog picker = new OpenFileDialog { Title = "Open the file from your other computer", Filter = "NetCrate connection|*.netcrate", Multiselect = false };
-            if (picker.ShowDialog(this) == true)
-                await RunSafeAsync(() => controller.ImportConnectionAsync(picker.FileName, CheckToken));
-        }
-
-        private void CheckScreen(StackPanel panel)
-        {
-            Heading(panel, "Check the round trip", controller.State.Role == ComputerRole.EditingComputer
-                ? (controller.State.BackupMode == "Folder" ? "A generated text file will be backed up, restored to a disposable copy and compared with its known original bytes." : "A short generated sample will travel to the Backup Server. Its returned proxy must pass local verification.")
-                : "The Editing Computer starts the sample check. Keep this computer on while it runs.");
-            if (controller.State.Role == ComputerRole.EditingComputer)
-                panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CheckToken)), true));
-        }
-
-        private void CompleteScreen(StackPanel panel)
-        {
-            Heading(panel, controller.State.Role == ComputerRole.EditingComputer ? "Your computers are ready" : "The Backup Server is ready",
-                controller.State.Role == ComputerRole.EditingComputer ? (controller.State.BackupMode == "Folder" ? "The sample restore passed verification. You can now choose a folder to back up." : "The sample proxy returned and passed verification. You can now choose a project to back up.")
-                : "Run the sample check on the Editing Computer. Keep this computer on and signed in while backups run.");
-            panel.Children.Add(Button("Open NetCrate", async () => await RunSafeAsync(async () =>
-            {
-                await controller.FinishAsync(CheckToken);
-                if (controller.LastResult.Succeeded) { SetupCompleted = true; Close(); }
-            }), true));
-        }
-
-        private void BuildFooter(Grid main)
-        {
-            Grid footer = new Grid { Margin = new Thickness(0, 16, 0, 0) };
-            footer.ColumnDefinitions.Add(new ColumnDefinition());
-            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetRow(footer, 1);
-            main.Children.Add(footer);
-            Button back = Button("_Back", async () => await RunSafeAsync(async () =>
-            {
-                controller.Back();
-                if (controller.State.Step == SetupStep.Prepare) await InspectAsync();
-                FocusFirst();
-            }), false);
-            back.HorizontalAlignment = HorizontalAlignment.Left;
-            back.Visibility = controller.State.Step == SetupStep.Computer ? Visibility.Hidden : Visibility.Visible;
-            footer.Children.Add(back);
-            if (controller.Busy && !controller.IsInstalling)
-            {
-                back.Visibility = Visibility.Collapsed;
-                Button cancel = Button("Cancel check", () => { if (checkCancellation != null) checkCancellation.Cancel(); }, false);
-                cancel.IsEnabled = true;
-                cancel.HorizontalAlignment = HorizontalAlignment.Left;
-                footer.Children.Add(cancel);
-            }
-            Button next = Button("_Continue", async () => await RunSafeAsync(async () =>
-            {
-                controller.Continue();
-                if (controller.State.Step == SetupStep.Prepare) await InspectAsync();
-                FocusFirst();
-            }), true);
-            next.IsEnabled = controller.CanContinue;
-            if (controller.State.Step == SetupStep.Complete) next.Visibility = Visibility.Collapsed;
-            next.MinWidth = 128;
-            next.IsDefault = controller.State.Step != SetupStep.Computer;
-            Grid.SetColumn(next, 1);
-            footer.Children.Add(next);
-        }
-
-        private async Task RunSafeAsync(Func<Task> action)
-        {
-            CancellationTokenSource previous = checkCancellation;
-            CancellationTokenSource current = new CancellationTokenSource();
-            checkCancellation = current;
-            try { await action(); }
-            catch (IOException) { MessageBox.Show(this, "Your setup choices could not be saved. Check the free space and permissions in your Windows user folder, then reopen NetCrate.", "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
-            catch (UnauthorizedAccessException) { MessageBox.Show(this, "NetCrate cannot save setup choices in your Windows user folder. Check the folder permissions, then reopen NetCrate.", "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information); }
-            finally
-            {
-                if (checkCancellation == current) checkCancellation = previous;
-                current.Dispose();
-            }
-        }
-
-        private void ShowSaveError()
-        {
-            MessageBox.Show(this, "Your setup choices could not be saved. Check the free space and permissions in your Windows user folder, then reopen NetCrate.", "NetCrate", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
-        private void FocusFirst()
-        {
-            string name = controller.State.Step == SetupStep.Computer ? "Editing Computer"
-                : controller.State.Step == SetupStep.Folders ? "Choose folder" : "Continue";
-            Control control;
-            if (controls.TryGetValue(name, out control) && control.IsEnabled) control.Focus();
-        }
-
-        private sealed class WindowOwner : Forms.IWin32Window
-        {
-            public IntPtr Handle { get; private set; }
-            public WindowOwner(IntPtr handle) { Handle = handle; }
-        }
     }
-
     internal static class NativeTheme
     {
-        [System.Runtime.InteropServices.DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
-        internal static extern int SetDarkTitleBar(IntPtr window, int attribute, ref int value, int size);
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll",EntryPoint="DwmSetWindowAttribute")]
+        internal static extern int SetDarkTitleBar(IntPtr window,int attribute,ref int value,int size);
     }
 }

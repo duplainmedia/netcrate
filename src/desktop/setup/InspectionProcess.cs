@@ -10,6 +10,7 @@ namespace NetCrate.Setup
     {
         internal static TimeSpan BrowseBudget { get { return TimeSpan.FromMinutes(30); } }
         internal static TimeSpan TimeoutFor(string action) {
+            if (action == "ReviewSoftware" || action == "ReviewRecoveryTools") return TimeSpan.FromMinutes(2);
             if (action == "ListBackups" || action == "ListBackupChildren") return BrowseBudget + TimeSpan.FromSeconds(10);
             return TimeSpan.FromSeconds(action == "CheckSample" ? 1250 : 90);
         }

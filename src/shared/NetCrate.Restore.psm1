@@ -44,10 +44,11 @@ function Invoke-RestoreNative($Context,[string[]]$Arguments) {
     return $r.Output
 }
 function New-RestoreContext($Request,[string]$Root,[string]$ResticExe,[string]$Action='ListBackups') {
-    $independent=[bool](Get-RestoreField $Request RecoveryFile)
+    $pasted=Get-RestoreField $Request RecoveryDocument
+    $independent=[bool]((Get-RestoreField $Request RecoveryFile) -or $pasted)
     $options=@();$forbidden=@($Root,[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')));$hostName='';$active=''
     if($independent) {
-        $recovery=Read-NetCrateJson (Get-RestoreField $Request RecoveryFile) -MaximumBytes 32768
+        $recovery=if($pasted){$pasted}else{Read-NetCrateJson (Get-RestoreField $Request RecoveryFile) -MaximumBytes 32768}
         if($recovery.Version -ne 1 -or $recovery.Kind -cne 'netcrate-recovery' -or $recovery.Primary.Id -cnotmatch '^[a-f0-9]{64}$' -or
             $recovery.Primary.Password -isnot [string] -or $recovery.Primary.Password.Length -lt 1 -or $recovery.Primary.Password.Length -gt 1024){throw 'Choose a valid NetCrate recovery file.'}
         $repository=Assert-NetCrateLocalPath (Get-RestoreField $Request RepositoryPath)

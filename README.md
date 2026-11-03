@@ -18,7 +18,7 @@ For someone with spare hardware and a suitable second location, it can be an aff
 
 ## Development status
 
-This branch includes a Windows setup wizard for an Editing Computer and a Backup Server. New setup defaults to ordinary folder backups, with optional media processing for video projects. It installs verified tools, creates encrypted backup storage, saves recovery details, connects the computers and verifies a generated sample.
+Version 0.2.0 development includes a guided Windows setup for an Editing Computer and a Backup Server. Setup reviews software before installation, shows progress, creates encrypted backup storage and helps save recovery details. Computers exchange pairing details over a private connection, with codes compared on both screens. The Editing Computer then verifies a generated sample backup and restore. Ordinary folder backups are the default; media processing is optional.
 
 Setup uses Windows dialogs and buttons. For ordinary files, choose **Back up a folder** and select the configured source folder or a folder inside it. New backups are confirmed after their recovery receipt is published, independently of media processing. In media mode, choose **Back up a project**. The server also creates ProRes Proxy files and contact sheets, and the Editing Computer verifies the returned files before showing them as ready. Earlier proxy versions remain available. Existing installations keep their media workflow.
 
