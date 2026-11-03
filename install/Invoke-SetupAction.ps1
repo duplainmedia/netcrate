@@ -1,5 +1,5 @@
 #requires -Version 5.1
-param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection', 'ListSchedules', 'SaveSchedule', 'DisableSchedule')][string]$Action,
+param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection', 'ListSchedules', 'SaveSchedule', 'DisableSchedule','StorageStatus','CheckStorage','PreviewRetention','ApplyRetention')][string]$Action,
     [Parameter(Mandatory)][string]$InputFile)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -69,7 +69,25 @@ try {
         exit $LASTEXITCODE
     }
     Import-Module (Join-Path $PSScriptRoot 'NetCrate.Engine.psm1') -DisableNameChecking
-    if ($Action -cin @('QueueBackup', 'ListSchedules', 'SaveSchedule', 'DisableSchedule')) {
+    if ($Action -cin @('StorageStatus','CheckStorage','PreviewRetention','ApplyRetention')) {
+        Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Maintenance.psm1')
+        Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Credentials.psm1')
+        $allowed=@('Version','InstallationId','Role')
+        if($Action -ceq 'PreviewRetention'){$allowed+=@('Policy','Count')}
+        if($Action -ceq 'ApplyRetention'){$allowed+=@('PreviewId','Confirm')}
+        if(@($state.PSObject.Properties.Name|Where-Object {$_ -cnotin $allowed}).Count){throw 'The storage request contains unsupported fields.'}
+        if($state.Role -cne 'BackupServer'){throw 'Open storage controls on the Backup Server.'}
+        $owner=Get-NetCrateOwner $root
+        $prepared=Read-NetCrateJson ([IO.Path]::Combine($root,'prepared.json'))
+        $context=Get-NetCrateMaintenanceContext $root $state.InstallationId
+        if($owner.Role -cne 'Worker' -or $prepared.Role -cne 'Worker' -or $prepared.InstallationId -cne $owner.InstallationId -or -not (Assert-NetCrateLocalPath $prepared.Folder).Equals($context.Binding.StorageRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'These storage controls do not match the owning installation.'}
+        if($Action -cne 'StorageStatus'){
+            $parameters=@{}
+            foreach($name in @('Policy','Count','PreviewId','Confirm')){if($state.PSObject.Properties.Name -ccontains $name){$parameters[$name]=$state.$name}}
+            $queued=Invoke-NetCrateMaintenanceRequest $root $state.InstallationId $Action $parameters
+        }
+        $result=@{Succeeded=$true;Code='ok';Message=$(if($Action -ceq 'StorageStatus'){'Storage status refreshed.'}else{'The storage request is queued for the signed-in Backup Server.'});Maintenance=(Get-NetCrateMaintenanceStatus $root $state.InstallationId);OperationId=$(if($Action -cne 'StorageStatus'){$queued.OperationId}else{''})}
+    } elseif ($Action -cin @('QueueBackup', 'ListSchedules', 'SaveSchedule', 'DisableSchedule')) {
         Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Workflow.psm1')
         Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Credentials.psm1')
         $owner = Get-NetCrateOwner $root

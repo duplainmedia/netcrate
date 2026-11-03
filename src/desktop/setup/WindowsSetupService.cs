@@ -75,9 +75,9 @@ namespace NetCrate.Setup
             return await InvokePreparationAsync("Prepare", state, token);
         }
 
-        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null)
+        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null, MaintenanceRequest maintenance = null)
         {
-            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule" };
+            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule", "StorageStatus", "CheckStorage", "PreviewRetention", "ApplyRetention" };
             if (Array.IndexOf(actions, action) < 0) throw new ArgumentException("Unsupported action.");
             token.ThrowIfCancellationRequested();
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
@@ -90,6 +90,12 @@ namespace NetCrate.Setup
             object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }
                 : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor, BrowseDeadlineUtc = action == "ListBackups" || action == "ListBackupChildren" ? DateTime.UtcNow.Add(InspectionProcess.BrowseBudget).ToString("o") : null };
             if (schedule != null) payload = new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, Path = schedule.Project, TimeOfDay = schedule.TimeOfDay, Enabled = schedule.Enabled };
+            if (maintenance != null) {
+                if (action == "StorageStatus" || action == "CheckStorage") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer" };
+                else if (action == "PreviewRetention" && maintenance.Policy == "KeepAll") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", Policy=maintenance.Policy };
+                else if (action == "PreviewRetention") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", Policy=maintenance.Policy, Count=maintenance.Count };
+                else payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", PreviewId=maintenance.PreviewId, Confirm=maintenance.Confirm };
+            }
             File.WriteAllText(input, json.Serialize(payload), new UTF8Encoding(false));
             try
             {
@@ -131,6 +137,7 @@ namespace NetCrate.Setup
                     SetupResult result = succeeded ? SetupResult.Done(Convert.ToString(record["Message"]))
                         : SetupResult.ActionRequired(Convert.ToString(record["Code"]), Convert.ToString(record["Message"]));
                     object value;
+                    if (record.TryGetValue("OperationId", out value)) result.OperationId = Convert.ToString(value);
                     if (record.TryGetValue("PairingCode", out value)) result.PairingCode = Convert.ToString(value);
                     if (record.TryGetValue("PairingStage", out value)) result.PairingStage = Convert.ToString(value);
                     if (record.TryGetValue("NextCursor", out value)) result.NextCursor = Convert.ToString(value);
@@ -144,6 +151,11 @@ namespace NetCrate.Setup
                         object[] items = (object[])value;
                         if (items.Length > 200) throw new InvalidDataException("The backup page is too large.");
                         foreach (object item in items) result.Items.Add(json.ConvertToType<BackupItem>(item));
+                    }
+                    if (record.TryGetValue("Maintenance", out value) && value != null) {
+                        result.Maintenance = json.ConvertToType<MaintenanceStatus>(value);
+                        if (result.Maintenance.Operations != null && result.Maintenance.Operations.Count > 256) throw new InvalidDataException("Too many storage operations.");
+                        if (result.Maintenance.Preview != null && result.Maintenance.Preview.Items != null && result.Maintenance.Preview.Items.Count > 256) throw new InvalidDataException("The retention preview is too large.");
                     }
                     object software;
                     if (record.TryGetValue("Software", out software) && software is object[])
@@ -167,6 +179,10 @@ namespace NetCrate.Setup
         public Task<SetupResult> InvokeScheduleAsync(string action, SetupState state, ScheduleRequest request, CancellationToken token) {
             if (action != "ListSchedules" && action != "SaveSchedule" && action != "DisableSchedule") throw new ArgumentException("Unsupported schedule action.");
             return InvokePreparationAsync(action, state, token, null, null, null, request);
+        }
+        public Task<SetupResult> InvokeMaintenanceAsync(string action, SetupState state, MaintenanceRequest request, CancellationToken token) {
+            if (action != "StorageStatus" && action != "CheckStorage" && action != "PreviewRetention" && action != "ApplyRetention") throw new ArgumentException("Unsupported storage action.");
+            return InvokePreparationAsync(action, state, token, null, null, null, null, request);
         }
         private static string Quote(string path)
         {

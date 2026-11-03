@@ -42,7 +42,7 @@ namespace NetCrate {
     job.BackupCompleted=Hex(job.SnapshotId);job.BackupVerified=false;job.Active=true;job.Attention=false;job.Progress=-1;
     string state=S(queue,"State");
     job.Phase=state=="BackingUp"?"Backing up":state=="WaitingForProxies"||state=="Ready"?"Waiting for proxies":state=="NeedsAttention"?"Backup needs attention":"Backup queued";
-    job.Detail="Keep both computers on and signed in. NetCrate retries interrupted work automatically.";job.Attention=state=="NeedsAttention";
+    job.Detail=state=="NeedsAttention"?"Check that the source folder is available and both computers are connected. For storage controls, open Backup storage on the Backup Server.":"Keep both computers on and signed in. NetCrate retries interrupted work automatically.";job.Attention=state=="NeedsAttention";
     if(mode=="Folder") {
      job.Active=state=="Queued"||state=="BackingUp";job.BackupCompleted=Hex(job.SnapshotId);
      if(state=="Ready"&&job.BackupCompleted){job.Phase="Backed up";job.Progress=100;job.Detail="Original files are backed up. Media processing is off.";}

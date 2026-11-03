@@ -44,6 +44,7 @@ $sources += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filt
 $viewSources = @((Join-Path $PSScriptRoot 'Theme.cs'), (Join-Path $PSScriptRoot 'RestoreView.cs')) + @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'setup') -Filter '*.cs' -File | Select-Object -ExpandProperty FullName)
 Build-Test 'SetupViewTests' ($viewSources + (Join-Path $repo 'tests\desktop\SetupViewTests.cs')) @() $references
 Build-Test 'ScheduleViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'ScheduleView.cs'), (Join-Path $repo 'tests\desktop\ScheduleViewTests.cs'))) @($TestRoot) $references
+Build-Test 'MaintenanceViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'MaintenanceView.cs'), (Join-Path $repo 'tests\desktop\MaintenanceViewTests.cs'))) @() $references
 Build-Test 'RestoreViewTests' @($state, (Join-Path $PSScriptRoot 'RestoreView.cs'), (Join-Path $repo 'tests\desktop\RestoreViewTests.cs')) @() $references
 $app = Join-Path $output 'NetCrate.exe'
 & $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$PSScriptRoot\App.manifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources

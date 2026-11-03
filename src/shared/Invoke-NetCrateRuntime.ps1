@@ -5,14 +5,23 @@ Import-Module (Join-Path $PSScriptRoot 'NetCrate.Workflow.psm1')
 Import-Module (Join-Path $PSScriptRoot 'NetCrate.Credentials.psm1')
 Import-Module (Join-Path $PSScriptRoot 'NetCrate.Configuration.psm1')
 Import-Module (Join-Path $PSScriptRoot '../../install/NetCrate.Engine.psm1')
+Import-Module (Join-Path $PSScriptRoot 'NetCrate.Maintenance.psm1')
+Import-Module (Join-Path $PSScriptRoot 'NetCrate.Endpoint.psm1')
 $owner = Get-NetCrateOwner $Root
 $created = $false
 $mutex = [Threading.Mutex]::new($false, ('Local\NetCrate-Runtime-' + $owner.UserSid + '-' + $owner.InstallationId), [ref]$created)
-$owned = $false; $server = $null
+$owned = $false; $workerMutex=$null; $workerOwned=$false; $endpointState = [pscustomobject]@{Process=$null;Job=$null}
 $startedUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
 try {
     try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
     if (-not $owned) { exit 0 }
+    if ($owner.Role -ceq 'Worker') {
+        # Local mutexes do not span Windows sessions. A second signed-in session
+        # must never start another worker or maintenance writer for this owner.
+        $workerMutex=[Threading.Mutex]::new($false,('Global\NetCrate-Worker-'+$owner.UserSid+'-'+$owner.InstallationId))
+        try {$workerOwned=$workerMutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$workerOwned=$true}
+        if(-not $workerOwned){exit 0}
+    }
     $scheduleStatus = $null
     $statusFile = [IO.Path]::Combine($Root, 'runtime-status.json')
     if ($owner.Role -ceq 'Source' -and [IO.File]::Exists($statusFile)) {
@@ -30,12 +39,10 @@ try {
                 Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { '' }) }
             $settings = Import-NetCrateSettings ([IO.Path]::Combine($Root, 'settings.json')) $owner.Role
             if ($owner.Role -ceq 'Worker') {
-                if (-not $server -or $server.HasExited) {
-                    $start = [Diagnostics.ProcessStartInfo]::new($settings.Tools.RestServer)
-                    $start.UseShellExecute = $false; $start.CreateNoWindow = $true
-                    foreach ($arg in (Get-NetCrateServerArguments $Root)) { $start.ArgumentList.Add($arg) }
-                    $server = [Diagnostics.Process]::Start($start)
-                }
+                Start-NetCrateOwnedEndpoint $endpointState $Root $settings
+                $quiesce={Stop-NetCrateOwnedEndpoint $endpointState $Root}.GetNewClosure()
+                $resume={Start-NetCrateOwnedEndpoint $endpointState $Root $settings}.GetNewClosure()
+                Invoke-NetCrateMaintenancePass $Root $owner.InstallationId $quiesce $resume
                 if ($settings.BackupMode -ceq 'Media' -and -not ($settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $settings.SourceBackupMode -ceq 'Folder')) { Invoke-NetCrateWorker $Root $settings }
             } else {
                 $scheduleStatus = Invoke-NetCrateSchedules $Root $settings
@@ -51,11 +58,12 @@ try {
                 Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { '' }) }
         } catch {
             Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'NeedsAttention'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o')
-                Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { $_.Exception.Message }) }
+                Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } elseif ($owner.Role -ceq 'Worker') { 'The Backup Server needs attention. Check its storage and private connection.' } else { $_.Exception.Message }) }
         }
         if (-not $Once) { Start-Sleep -Seconds 5 }
     } while (-not $Once)
 } finally {
-    if ($server) { if (-not $server.HasExited) { $server.Kill($true) }; $server.Dispose() }
+    try { if ($endpointState.Process -or $endpointState.Job) { Stop-NetCrateOwnedEndpoint $endpointState $Root } } catch { }
+    if ($workerMutex) { if ($workerOwned) { $workerMutex.ReleaseMutex() }; $workerMutex.Dispose() }
     if ($owned) { $mutex.ReleaseMutex() }; $mutex.Dispose()
 }

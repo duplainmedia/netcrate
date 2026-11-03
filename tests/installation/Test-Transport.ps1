@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$TestRoot, [Parameter(Mandatory)][string]$ResticExe,
     [Parameter(Mandatory)][string]$PythonExe, [Parameter(Mandatory)][string]$RestServerExe)
 $ErrorActionPreference = 'Stop'
+if([IO.File]::Exists($TestRoot) -or [IO.Directory]::Exists($TestRoot)){throw 'TestRoot must be a new disposable directory.'}
 Import-Module "$PSScriptRoot/../../install/NetCrate.Engine.psm1" -Force
 Import-Module "$PSScriptRoot/../../install/NetCrate.Repositories.psm1"
 foreach ($name in @('Configuration', 'Credentials', 'Workflow')) { Import-Module "$PSScriptRoot/../../src/shared/NetCrate.$name.psm1" }
@@ -34,6 +35,16 @@ try {
     if (-not $connected -or $config.id -cne $bindings.PrimaryId) { throw 'The authenticated HTTPS endpoint did not return its pinned repository.' }
     $result = Invoke-WorkflowRestic $source $settings Results @('cat', 'config') | ConvertFrom-Json
     if ($result.id -cne $bindings.ResultsId) { throw 'The result repository identity changed.' }
+    # A remote client may append but must not be able to forget an original.
+    $fixtureFile=[IO.Path]::Combine($source,'append-only-fixture.txt');[IO.File]::WriteAllText($fixtureFile,'disposable transport fixture')
+    $backup=Invoke-WorkflowRestic $source $settings Primary @('backup','--json','--host','SOURCE','--tag','transport-fixture','--',$fixtureFile)
+    $summary=@($backup -split '\r?\n'|Where-Object {$_}|ForEach-Object {$_|ConvertFrom-Json}|Where-Object message_type -CEQ 'summary')
+    if($summary.Count -ne 1 -or $summary[0].snapshot_id -cnotmatch '^[a-f0-9]{64}$'){throw 'The disposable transport backup did not complete.'}
+    $denied=$false;try{Invoke-WorkflowRestic $source $settings Primary @('forget',$summary[0].snapshot_id)|Out-Null}catch{$denied=$true}
+    if(-not $denied){throw 'The append-only endpoint accepted remote deletion.'}
+    $retained=@(Invoke-WorkflowRestic $source $settings Primary @('snapshots','--json',$summary[0].snapshot_id)|ConvertFrom-Json)
+    if($retained.Count -ne 1 -or $retained[0].id -cne $summary[0].snapshot_id){throw 'The fixture original did not survive the denied remote deletion.'}
+    Write-Output 'PASS: append-only transport denied remote forget and retained the fixture snapshot.'
     [IO.File]::WriteAllText("$source/server.pem", 'invalid certificate')
     $rejected = $false; try { Invoke-WorkflowRestic $source $settings Primary @('cat', 'config') | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw 'An untrusted TLS certificate was accepted.' }
