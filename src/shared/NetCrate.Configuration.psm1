@@ -21,22 +21,35 @@ function Assert-NetCrateLocalPath {
         throw 'Choose an ordinary local folder.'
     }
     $full = [IO.Path]::GetFullPath($LiteralPath).TrimEnd('\')
+    if ($full -match '(^|\\)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9\u00b9\u00b2\u00b3]|LPT[1-9\u00b9\u00b2\u00b3])(\.|\\|$)') {
+        throw 'Choose an ordinary local folder.'
+    }
     if (-not $AllowDriveRoot -and $full.Length -lt 4) { throw 'Choose a folder inside the drive.' }
     $part = $full
     while ($part) {
-        if (([IO.File]::Exists($part) -or [IO.Directory]::Exists($part)) -and
-            ([IO.File]::GetAttributes($part) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Linked paths are not supported.' }
+        $native = if ($PSVersionTable.PSVersion.Major -lt 7) { '\\?\' + $part } else { $part }
+        if (([IO.File]::Exists($native) -or [IO.Directory]::Exists($native)) -and
+            ([IO.File]::GetAttributes($native) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Linked paths are not supported.' }
         $part = [IO.Path]::GetDirectoryName($part.TrimEnd('\'))
     }
     return $full
 }
 
+function ConvertTo-NetCrateFileSystemPath {
+    param([Parameter(Mandatory)][string]$LiteralPath)
+    $full = Assert-NetCrateLocalPath $LiteralPath
+    # Framework I/O in Windows PowerShell needs explicit extended paths.
+    # Validate and normalize the ordinary path before adding the internal prefix.
+    if ($PSVersionTable.PSVersion.Major -lt 7) { return '\\?\' + $full }
+    return $full
+}
+
 function Read-NetCrateJson {
     param([Parameter(Mandatory)][string]$LiteralPath, [long]$MaximumBytes = 1048576)
-    $null = Assert-NetCrateLocalPath $LiteralPath
-    $file = Get-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop
+    $path = ConvertTo-NetCrateFileSystemPath $LiteralPath
+    $file = Get-Item -LiteralPath $path -Force -ErrorAction Stop
     if ($file.PSIsContainer -or $file.Length -gt $MaximumBytes) { throw 'The NetCrate record is invalid or too large.' }
-    $text = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8)
+    $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
     if ('System.Text.Json.JsonDocument' -as [type]) {
         $options = [System.Text.Json.JsonDocumentOptions]::new()
         $options.MaxDepth = 32
@@ -49,7 +62,7 @@ function Read-NetCrateJson {
 
 function Write-NetCrateJson {
     param([Parameter(Mandatory)][string]$LiteralPath, [Parameter(Mandatory)]$Value)
-    $path = Assert-NetCrateLocalPath $LiteralPath
+    $path = ConvertTo-NetCrateFileSystemPath $LiteralPath
     $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
     $temporary = $path + '.' + [guid]::NewGuid().ToString('N') + '.writing'
     try {
@@ -158,4 +171,4 @@ function Import-NetCrateSettings {
     return $settings
 }
 
-Export-ModuleMember -Function Assert-NetCrateLocalPath, Assert-NetCrateRelativePath, Read-NetCrateJson, Write-NetCrateJson, Get-NetCrateSnapshotRoot, Get-NetCrateProjectPath, Get-NetCrateBackupMode, Get-NetCrateBackupPath, Import-NetCrateSettings
+Export-ModuleMember -Function Assert-NetCrateLocalPath, ConvertTo-NetCrateFileSystemPath, Assert-NetCrateRelativePath, Read-NetCrateJson, Write-NetCrateJson, Get-NetCrateSnapshotRoot, Get-NetCrateProjectPath, Get-NetCrateBackupMode, Get-NetCrateBackupPath, Import-NetCrateSettings
