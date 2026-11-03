@@ -393,8 +393,10 @@ function Convert-WorkflowSnapshotPath([string]$Path) {
     return $Path
 }
 
+. (Join-Path $PSScriptRoot 'NetCrate.Schedule.ps1')
 . (Join-Path $PSScriptRoot 'NetCrate.Queue.ps1')
 . (Join-Path $PSScriptRoot 'NetCrate.RemoteResult.ps1')
 Export-ModuleMember -Function Invoke-NetCrateBackup, Invoke-NetCrateWorker, Invoke-NetCrateReceiver, Get-NetCrateReceipt,
     New-NetCrateSample, Invoke-WorkflowRestic, Write-WorkflowRecord, Read-WorkflowRecords, Test-WorkflowResult, Assert-WorkflowTree,
-    Add-NetCrateBackupQueue, Invoke-NetCrateQueue, Update-NetCrateQueue, Invoke-NetCrateOriginals
+    Add-NetCrateBackupQueue, Invoke-NetCrateQueue, Update-NetCrateQueue, Invoke-NetCrateOriginals,
+    Save-NetCrateSchedule, Disable-NetCrateSchedule, Get-NetCrateSchedules, Invoke-NetCrateSchedules, Get-NetCrateScheduleOccurrence

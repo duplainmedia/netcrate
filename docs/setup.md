@@ -38,6 +38,16 @@ If a computer or drive disconnects, reconnect it and leave NetCrate running. Int
 
 Linked paths, online-only or offline placeholders and folders overlapping NetCrate's application or backup storage are unsupported. Make cloud files fully local and choose a separate ordinary folder. Locked or unreadable files fail the backup and retry; a partial Restic snapshot is not reported as a completed backup. Existing installations without a saved mode keep their Media behavior. Repair requires their original folder and mode.
 
+## Automatic backups and backup status
+
+On the source dashboard, choose **Automatic backups**, then **Choose folder**. Folder mode accepts the configured folder itself or a contained folder; Media mode accepts one direct child project. Enter one daily local time in **HH:mm**, leave **Enabled** checked and choose **Save schedule**. Select an existing row to change its time or enabled setting, or choose **Disable schedule**. The row shows the next full date, time, UTC offset and Windows time zone. Errors remain visible in the window so you can correct the folder or time and retry.
+
+The first run is the next occurrence after you save. After several missed days, NetCrate queues one catch-up backup of the folder's current contents, then resumes daily runs. If the folder is unavailable, reconnect it; other folders continue. A spring clock change runs a skipped minute at the next valid local minute. A repeated autumn hour runs once for that local date. Changing Windows time zone uses the new local time for future dates; already consumed local dates do not run again. Editing a schedule changes future admissions; work already queued or running may finish. A manual backup and a due schedule for the same folder share an active originals job. Completed originals allow a new backup while older media is still pending.
+
+Both computers must stay on, signed in to Windows and connected. Closing the app leaves the existing signed-in background runtime working. Signing out stops that runtime; there is no signed-out service and schedules do not create additional Windows tasks.
+
+Select a folder in the dashboard to see **Latest attempt** separately from **Last successful original** and **Media**. Dates include the full date, offset and local zone. A later queued or failed attempt does not hide an earlier successful original. Older checkpoints without a reliable successful-backup timestamp say **time unknown**. Media pending or needing attention does not change the successful originals result.
+
 ## Restore files
 
 On the source dashboard, choose **Restore files**. Choose a dated backup, then double-click a folder (or press Enter) to browse its immediate contents. The breadcrumb returns to the whole backup or any parent folder. Select one file or folder, or leave nothing selected to restore the folder shown in the breadcrumb. **More** loads another page when needed. Each date page checks at most 50 candidate backups; opening a date checks that backup directly. Browsing can be cancelled by closing its window. A slow browse has a 30-minute total budget, shared by its metadata reads; reconnect the drive or private connection and choose Refresh if it times out.

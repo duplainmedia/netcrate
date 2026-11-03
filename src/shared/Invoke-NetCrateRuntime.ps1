@@ -26,6 +26,7 @@ try {
                 }
                 if ($settings.BackupMode -ceq 'Media' -and -not ($settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $settings.SourceBackupMode -ceq 'Folder')) { Invoke-NetCrateWorker $Root $settings }
             } else {
+                Invoke-NetCrateSchedules $Root $settings
                 Invoke-NetCrateQueue $Root $settings
                 if ($settings.BackupMode -ceq 'Media') { Invoke-NetCrateReceiver $Root $settings }
                 Update-NetCrateQueue $Root $settings

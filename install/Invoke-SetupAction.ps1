@@ -1,5 +1,5 @@
 #requires -Version 5.1
-param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection')][string]$Action,
+param([Parameter(Mandatory)][ValidateSet('Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection', 'ListSchedules', 'SaveSchedule', 'DisableSchedule')][string]$Action,
     [Parameter(Mandatory)][string]$InputFile)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -69,7 +69,7 @@ try {
         exit $LASTEXITCODE
     }
     Import-Module (Join-Path $PSScriptRoot 'NetCrate.Engine.psm1') -DisableNameChecking
-    if ($Action -ceq 'QueueBackup') {
+    if ($Action -cin @('QueueBackup', 'ListSchedules', 'SaveSchedule', 'DisableSchedule')) {
         Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Workflow.psm1')
         Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Credentials.psm1')
         $owner = Get-NetCrateOwner $root
@@ -77,8 +77,16 @@ try {
         if ($state.Role -cne 'EditingComputer' -or $owner.Role -cne 'Source' -or $owner.InstallationId -cne $state.InstallationId -or $prepared.Role -cne 'Source' -or $prepared.InstallationId -cne $owner.InstallationId -or (Get-NetCrateBackupMode $prepared) -cne $mode -or -not $prepared.Folder.Equals($state.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The backup action does not match this source installation.' }
         $settings = Import-NetCrateSettings ([IO.Path]::Combine($root, 'settings.json')) Source
         if ($settings.InstallationId -cne $owner.InstallationId -or (Get-NetCrateBackupMode $settings) -cne $mode -or -not $settings.StateRoot.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or -not $settings.ActiveRoot.Equals($prepared.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The backup settings do not match this installation.' }
-        $null = Add-NetCrateBackupQueue $root $settings $state.Path
-        $result = @{ Succeeded = $true; Code = 'ok'; Message = 'The folder was added to the backup queue.' }
+        if ($Action -ceq 'QueueBackup') {
+            $null = Add-NetCrateBackupQueue $root $settings $state.Path
+            $result = @{ Succeeded = $true; Code = 'ok'; Message = 'The folder was added to the backup queue.' }
+        } else {
+            if ($Action -ceq 'SaveSchedule') {
+                if ($state.PSObject.Properties.Name -notcontains 'TimeOfDay' -or $state.TimeOfDay -isnot [string] -or $state.TimeOfDay.Length -ne 5 -or $state.PSObject.Properties.Name -notcontains 'Enabled' -or $state.Enabled -isnot [bool]) { throw 'Choose a daily time in HH:mm format and whether to enable the schedule.' }
+                $null = Save-NetCrateSchedule $root $settings $state.Path $state.TimeOfDay $state.Enabled
+            } elseif ($Action -ceq 'DisableSchedule') { Disable-NetCrateSchedule $root $settings $state.Path }
+            $result = @{ Succeeded=$true; Code='ok'; Message=$(if ($Action -ceq 'ListSchedules') {'Automatic backups require both computers to be on, signed in and connected.'} else {'The schedule was saved.'}); Schedules=@(Get-NetCrateSchedules $root) }
+        }
     } else { $result = Invoke-NetCrateSetupAction $Action $state $root (Split-Path -Parent $PSScriptRoot) }
     $result | ConvertTo-Json -Depth 8 -Compress
 } catch {

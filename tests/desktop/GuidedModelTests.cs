@@ -53,6 +53,20 @@ class GuidedModelTests {
   Put(Path.Combine(state,"Queue","media-failure.json"),new{Project=mediaFailure,BackupMode="Media",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="NeedsAttention",State="NeedsAttention",Sample=false,SnapshotId=new string('9',64),RequestId="",Id="media-failure",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
   Job mediaJob=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==mediaFailure);
   Assert(mediaJob.BackupCompleted&&mediaJob.BackupCompletedUtc==new DateTime(2026,11,2,20,0,0,DateTimeKind.Utc)&&mediaJob.MediaState=="NeedsAttention","Offline media publication hid a successful original backup.");
+  Put(Path.Combine(state,"Queue","later.json"),new{Project=ordinary,BackupMode="Folder",BackupCompletedUtc="",MediaState="Off",State="NeedsAttention",Sample=false,SnapshotId="",RequestId="",Id="later",CreatedUtc="2026-11-03T19:00:00Z",UpdatedUtc="2026-11-03T20:00:00Z"});
+  Job later=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==ordinary);
+  Assert(later.BackupCompleted&&later.BackupCompletedUtc==folder.BackupCompletedUtc&&later.LastAttemptUtc==new DateTime(2026,11,3,19,0,0,DateTimeKind.Utc)&&later.AttemptState=="NeedsAttention","Latest failure hid earlier original or attempt time.");
+  Assert(later.BackupStatus.Contains("2026")&&later.BackupStatus.Contains("Last successful original")&&later.BackupStatus.Contains("Latest attempt"),"Dashboard omitted separate full dates.");
+  string legacy=Path.Combine(projects,"Legacy");
+  Put(Path.Combine(state,"Queue","legacy.json"),new{Project=legacy,BackupMode="Folder",State="Ready",Sample=false,SnapshotId=new string('8',64),RequestId="",Id="legacy",CreatedUtc="2024-01-01T00:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
+  Job old=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==legacy);
+  Assert(old.BackupCompleted&&old.BackupCompletedUtc==DateTime.MinValue&&old.BackupStatus.Contains("time unknown"),"Legacy original invented a completion time.");
+  Put(Path.Combine(state,"Queue","later.json"),new{Project=ordinary,BackupMode="Folder",BackupCompletedUtc="",MediaState="Off",State="Queued",Sample=false,SnapshotId="",RequestId="",Id="later",CreatedUtc="2026-11-03T19:00:00Z",UpdatedUtc="2026-11-03T20:00:00Z"});
+  later=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==ordinary);
+  Assert(later.BackupCompleted&&later.BackupCompletedUtc==folder.BackupCompletedUtc&&later.Active&&later.AttemptState=="Queued","Queued attempt replaced earlier successful originals.");
+  Put(Path.Combine(state,"Queue","media-failure.json"),new{Project=mediaFailure,BackupMode="Media",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="Pending",State="WaitingForProxies",Sample=false,SnapshotId=new string('9',64),RequestId="",Id="media-failure",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
+  mediaJob=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==mediaFailure);
+  Assert(mediaJob.BackupCompleted&&mediaJob.BackupStatus.Contains("Media: Pending")&&mediaJob.BackupCompletedUtc==new DateTime(2026,11,2,20,0,0,DateTimeKind.Utc),"Pending media hid original completion.");
   Console.WriteLine("PASS: "+assertions+" guided backup monitor assertions.");
  }
  static string Hash(string path){using(SHA256 hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path))).Replace("-","").ToLowerInvariant();}

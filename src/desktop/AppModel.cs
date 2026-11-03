@@ -11,6 +11,10 @@ namespace NetCrate {
  public class Job {
   public string Id{get;set;} public string Project{get;set;} public string ProjectPath{get;set;} public string SnapshotId{get;set;}
   public string BackupMode{get;set;} public string MediaState{get;set;} public DateTime BackupCompletedUtc{get;set;}
+  public DateTime LastAttemptUtc{get;set;} public string AttemptState{get;set;}
+  public string BackupStatus { get { return "Latest attempt: "+(LastAttemptUtc==DateTime.MinValue?"unknown":LocalDate(LastAttemptUtc))+" · "+StatusLabel(AttemptState)+"\nLast successful original: "+(BackupCompleted?(BackupCompletedUtc==DateTime.MinValue?"time unknown":LocalDate(BackupCompletedUtc)):"none yet")+"\nMedia: "+StatusLabel(MediaState); } }
+  static string StatusLabel(string state){switch(state){case "NeedsAttention":return "Needs attention";case "BackingUp":return "Backing up";case "WaitingForProxies":return "Originals backed up; media pending";case "Ready":return "Ready";case "Queued":return "Queued";case "Off":return "Off";case "Pending":return "Pending";default:return "status unknown";}}
+  static string LocalDate(DateTime utc){return utc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")+" ("+TimeZoneInfo.Local.Id+")";}
   public string Phase{get;set;} public string Detail{get;set;} public string ResultFolder{get;set;} public string ResultSnapshot{get;set;} public string Revision{get;set;}
   public bool Active{get;set;} public bool Attention{get;set;} public bool BackupCompleted{get;set;} public bool BackupVerified{get;set;}
   public double Progress{get;set;} public long Bytes{get;set;} public long Files{get;set;} public int ProxyFiles{get;set;} public int ContactSheets{get;set;}

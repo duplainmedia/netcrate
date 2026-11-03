@@ -75,9 +75,9 @@ namespace NetCrate.Setup
             return await InvokePreparationAsync("Prepare", state, token);
         }
 
-        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null)
+        public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null)
         {
-            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection" };
+            string[] actions = { "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule" };
             if (Array.IndexOf(actions, action) < 0) throw new ArgumentException("Unsupported action.");
             token.ThrowIfCancellationRequested();
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
@@ -89,6 +89,7 @@ namespace NetCrate.Setup
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
             object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }
                 : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor, BrowseDeadlineUtc = action == "ListBackups" || action == "ListBackupChildren" ? DateTime.UtcNow.Add(InspectionProcess.BrowseBudget).ToString("o") : null };
+            if (schedule != null) payload = new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, Path = schedule.Project, TimeOfDay = schedule.TimeOfDay, Enabled = schedule.Enabled };
             File.WriteAllText(input, json.Serialize(payload), new UTF8Encoding(false));
             try
             {
@@ -134,6 +135,11 @@ namespace NetCrate.Setup
                     if (record.TryGetValue("PairingStage", out value)) result.PairingStage = Convert.ToString(value);
                     if (record.TryGetValue("NextCursor", out value)) result.NextCursor = Convert.ToString(value);
                     if (record.TryGetValue("RestoredPath", out value)) result.RestoredPath = Convert.ToString(value);
+                    if (record.TryGetValue("Schedules", out value) && value is object[]) {
+                        object[] schedules = (object[])value;
+                        if (schedules.Length > 256) throw new InvalidDataException("There are too many schedules.");
+                        foreach (object item in schedules) result.Schedules.Add(json.ConvertToType<ScheduleItem>(item));
+                    }
                     if (record.TryGetValue("Items", out value) && value is object[]) {
                         object[] items = (object[])value;
                         if (items.Length > 200) throw new InvalidDataException("The backup page is too large.");
@@ -157,6 +163,10 @@ namespace NetCrate.Setup
         public Task<SetupResult> InvokeRestoreAsync(string action, RestoreRequest request, CancellationToken token) {
             if (action != "ListBackups" && action != "ListBackupChildren" && action != "RestoreSelection") throw new ArgumentException("Unsupported recovery action.");
             return InvokePreparationAsync(action, new SetupState(), token, null, null, request);
+        }
+        public Task<SetupResult> InvokeScheduleAsync(string action, SetupState state, ScheduleRequest request, CancellationToken token) {
+            if (action != "ListSchedules" && action != "SaveSchedule" && action != "DisableSchedule") throw new ArgumentException("Unsupported schedule action.");
+            return InvokePreparationAsync(action, state, token, null, null, null, request);
         }
         private static string Quote(string path)
         {

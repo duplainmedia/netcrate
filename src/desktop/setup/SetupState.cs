@@ -48,13 +48,14 @@ namespace NetCrate.Setup
         public IList<SoftwareCheck> Software { get; set; }        public IList<BackupItem> Items { get; set; }
         public string NextCursor { get; set; }
         public string RestoredPath { get; set; }
+        public IList<ScheduleItem> Schedules { get; set; }
 
         private SetupResult(bool succeeded, string code, string message)
         {
             Succeeded = succeeded;
             Code = code;
             Message = message;
-            Software = new List<SoftwareCheck>(); Items = new List<BackupItem>();
+            Software = new List<SoftwareCheck>(); Items = new List<BackupItem>(); Schedules = new List<ScheduleItem>();
         }
 
         public static SetupResult Done(string message) { return new SetupResult(true, "ok", message); }
@@ -86,6 +87,26 @@ namespace NetCrate.Setup
     }
     public interface IRestoreService {
         System.Threading.Tasks.Task<SetupResult> InvokeRestoreAsync(string action, RestoreRequest request, System.Threading.CancellationToken token);
+    }
+    public sealed class ScheduleItem {
+        public string Id { get; set; }
+        public string Project { get; set; }
+        public string TimeOfDay { get; set; }
+        public bool Enabled { get; set; }
+        public int Revision { get; set; }
+        public string NextDueUtc { get; set; }
+        public string TimeZone { get; set; }
+        public string Status { get; set; }
+        public string NextRun { get { DateTimeOffset date; return !Enabled?"Disabled":DateTimeOffset.TryParse(NextDueUtc,out date)?date.ToLocalTime().ToString("yyyy-MM-dd HH:mm zzz")+" ("+TimeZone+")":"Next run unavailable"; } }
+        public override string ToString(){return Project+" · "+TimeOfDay+" · "+NextRun+(String.IsNullOrEmpty(Status)?"":" · "+Status);}
+    }
+    public sealed class ScheduleRequest {
+        public string Project { get; set; }
+        public string TimeOfDay { get; set; }
+        public bool Enabled { get; set; }
+    }
+    public interface IScheduleService {
+        System.Threading.Tasks.Task<SetupResult> InvokeScheduleAsync(string action, ScheduleRequest request, System.Threading.CancellationToken token);
     }
     public sealed class SoftwareCheck
     {

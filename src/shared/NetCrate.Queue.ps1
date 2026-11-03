@@ -1,5 +1,10 @@
 function Add-NetCrateBackupQueue {
-    param([string]$Root, $Settings, [string]$Project, [switch]$Sample)
+    param([string]$Root, $Settings, [string]$Project, [switch]$Sample, [string]$OccurrenceId, [string]$LocalDate, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
+    Invoke-NetCrateAdmissionLock $Root { Add-NetCrateBackupQueueCore $Root $Settings $Project -Sample:$Sample -OccurrenceId $OccurrenceId -LocalDate $LocalDate -Now $Now }
+}
+
+function Add-NetCrateBackupQueueCore {
+    param([string]$Root, $Settings, [string]$Project, [switch]$Sample, [string]$OccurrenceId, [string]$LocalDate, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
     $mode = Get-NetCrateBackupMode $Settings
     if ($Sample) {
         $Project = [IO.Path]::Combine($Settings.ActiveRoot, 'NetCrate sample-' + $Settings.InstallationId.Substring(0, 8))
@@ -32,16 +37,32 @@ function Add-NetCrateBackupQueue {
     $path = Get-NetCrateBackupPath $Settings $Project $mode
     if (-not [IO.Directory]::Exists($path)) { throw 'The project folder is not available.' }
     $queue = [IO.Path]::Combine($Root, 'Queue'); $null = [IO.Directory]::CreateDirectory($queue)
-    $id = if ($Sample) { Get-NetCrateHash ('sample|' + $Settings.InstallationId) } else { [guid]::NewGuid().ToString('N') }
+    $associationFile = if ($OccurrenceId) { [IO.Path]::Combine($Root, 'ScheduleOccurrences', (Get-NetCrateHash $OccurrenceId) + '.json') } else { '' }
+    if ($associationFile -and [IO.File]::Exists($associationFile)) {
+        $association = Read-NetCrateJson $associationFile
+        $id = $association.JobId
+    } else {
+        $active = @([IO.Directory]::EnumerateFiles($queue, '*.json') | ForEach-Object { Read-NetCrateJson $_ } | Where-Object {
+            $_.Project.Equals($path, [StringComparison]::OrdinalIgnoreCase) -and $_.State -cin @('Queued','BackingUp','NeedsAttention') -and $_.SnapshotId -cnotmatch '^[a-f0-9]{64}$'
+        } | Select-Object -First 1)
+        $reservations = [IO.Path]::Combine($Root, 'ScheduleOccurrences')
+        $reserved = @(if ([IO.Directory]::Exists($reservations)) { [IO.Directory]::EnumerateFiles($reservations, '*.json') | ForEach-Object { Read-NetCrateJson $_ } | Where-Object {
+            $_.Project.Equals($path, [StringComparison]::OrdinalIgnoreCase) -and -not [IO.File]::Exists([IO.Path]::Combine($queue, $_.JobId + '.json'))
+        } | Select-Object -First 1 })
+        $id = if ($active.Count) { $active[0].Id } elseif ($Sample) { Get-NetCrateHash ('sample|' + $Settings.InstallationId) } elseif ($reserved.Count) { $reserved[0].JobId } elseif ($OccurrenceId) { Get-NetCrateHash ('schedule|' + $OccurrenceId) } else { [guid]::NewGuid().ToString('N') }
+        # Durable assignment precedes queue creation and cursor advancement. Replay repairs a missing job using this ID.
+        if ($associationFile) { Write-NetCrateJson $associationFile @{Version=1; OccurrenceId=$OccurrenceId; LocalDate=$LocalDate; JobId=$id; Project=$path} }
+    }
     $file = [IO.Path]::Combine($queue, $id + '.json')
+    if (-not $Sample -and [IO.File]::Exists($file)) { return $file }
     if ([IO.File]::Exists($file)) {
         $existing = Read-NetCrateJson $file
         if ($existing.State -ceq 'Ready') { return $file }
-        $existing.State = 'Queued'; $existing.RetryAfterUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $existing
+        $existing.State = 'Queued'; $existing.RetryAfterUtc = $Now.ToString('o'); Write-NetCrateJson $file $existing
     } else {
         Write-NetCrateJson $file ([ordered]@{ Version = 1; Id = $id; Project = $path; State = 'Queued'; Sample = [bool]$Sample; BackupMode = $mode
             BackupCompletedUtc = ''; MediaState = $(if ($mode -ceq 'Folder') { 'Off' } else { 'Pending' })
-            SnapshotId = ''; RequestId = ''; CreatedUtc = [DateTime]::UtcNow.ToString('o'); UpdatedUtc = [DateTime]::UtcNow.ToString('o'); RetryAfterUtc = [DateTime]::UtcNow.ToString('o') })
+            SnapshotId = ''; RequestId = ''; CreatedUtc = $Now.ToString('o'); UpdatedUtc = $Now.ToString('o'); RetryAfterUtc = $Now.ToString('o') })
     }
     return $file
 }
