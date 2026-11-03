@@ -79,8 +79,12 @@ try {
         if($state.Role -cne 'BackupServer'){throw 'Open storage controls on the Backup Server.'}
         $owner=Get-NetCrateOwner $root
         $prepared=Read-NetCrateJson ([IO.Path]::Combine($root,'prepared.json'))
-        $context=Get-NetCrateMaintenanceContext $root $state.InstallationId
-        if($owner.Role -cne 'Worker' -or $prepared.Role -cne 'Worker' -or $prepared.InstallationId -cne $owner.InstallationId -or -not (Assert-NetCrateLocalPath $prepared.Folder).Equals($context.Binding.StorageRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'These storage controls do not match the owning installation.'}
+        if($owner.Role -cne 'Worker' -or $owner.InstallationId -cne $state.InstallationId -or $prepared.Role -cne 'Worker' -or $prepared.InstallationId -cne $owner.InstallationId){throw 'These storage controls do not match the owning installation.'}
+        $preparedFolder=Assert-NetCrateLocalPath $prepared.Folder
+        if($Action -cin @('PreviewRetention','ApplyRetention')){
+            $context=Get-NetCrateMaintenanceContext $root $state.InstallationId
+            if(-not $preparedFolder.Equals($context.Binding.StorageRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'These storage controls do not match the owning installation.'}
+        }
         if($Action -cne 'StorageStatus'){
             $parameters=@{}
             foreach($name in @('Policy','Count','PreviewId','Confirm')){if($state.PSObject.Properties.Name -ccontains $name){$parameters[$name]=$state.$name}}

@@ -6,7 +6,7 @@ foreach($name in @('Configuration','Credentials','Process')) { Import-Module (Jo
 # Maintenance has a stricter local binding than normal worker settings, which
 # can also describe a remote URI. Never create or repair storage here.
 function Get-NetCrateMaintenanceContext {
-    param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$InstallationId)
+    param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$InstallationId,[int]$ConfigTimeoutSeconds=120)
     $rootPath=Assert-NetCrateLocalPath $Root
     $owner=Get-NetCrateOwner $rootPath
     if($owner.Role -cne 'Worker' -or $owner.InstallationId -cne $InstallationId){throw 'Open storage controls on the owning Backup Server.'}
@@ -28,7 +28,7 @@ function Get-NetCrateMaintenanceContext {
         if(-not $path.Equals($saved,[StringComparison]::OrdinalIgnoreCase) -or -not $path.Equals([string]$settings.Repositories.$name.Uri,[StringComparison]::OrdinalIgnoreCase) -or $id -cnotmatch '^[a-f0-9]{64}$' -or $id -cne $settings.Repositories.$name.Id -or -not [IO.File]::Exists([IO.Path]::Combine($path,'config'))){throw 'A local repository binding is invalid.'}
         $password=[string]$secret.($name+'Password')
         if(-not $password -or $password.Length -gt 1024){throw 'The protected repository key is invalid.'}
-        $result=Invoke-NetCrateProcess $settings.Tools.Restic @('--repo',$path,'--no-cache','cat','config') @{RESTIC_PASSWORD=$password} -TimeoutSeconds 120
+        $result=Invoke-NetCrateProcess $settings.Tools.Restic @('--repo',$path,'--no-cache','cat','config') @{RESTIC_PASSWORD=$password} -TimeoutSeconds $ConfigTimeoutSeconds
         if($result.ExitCode -ne 0){throw 'The backup repository could not be verified.'}
         $config=$result.Output | ConvertFrom-Json
         if($config.id -cne $id){throw 'The actual repository identity differs from the binding.'}
@@ -81,6 +81,17 @@ function Convert-MaintenanceSnapshotPath([string]$Path) {
     if($Path -cnotmatch '^[A-Za-z]:[\\/].+' -or $Path.Substring(3) -match '[\\/]{2}'){throw 'A backup has an unsupported source path.'}
     $relative=$Path.Substring(3).Replace('\','/');$null=Assert-NetCrateRelativePath $relative
     return '/'+$Path.Substring(0,1).ToUpperInvariant()+'/'+$relative
+}
+function Assert-MaintenancePreviewLimit([int]$Eligible,[int]$Candidates) {
+    if($Eligible -gt 256 -or $Candidates -gt 256){throw [InvalidOperationException]::new('netcrate-preview-limit')}
+}
+function Select-MaintenanceCandidates([object[]]$Eligible,$Protected,[int]$Count) {
+    $candidates=[Collections.Generic.List[string]]::new()
+    foreach($group in @($Eligible|Group-Object {$_.Host.ToUpperInvariant()+'|'+$_.Path.ToUpperInvariant()})) {
+        $ordered=@($group.Group|Sort-Object @{Expression='Time';Descending=$true},@{Expression='Id';Descending=$true})
+        for($index=$Count;$index -lt $ordered.Count;$index++){if(-not $Protected.Contains($ordered[$index].Id)){$candidates.Add($ordered[$index].Id)}}
+    }
+    return $candidates.ToArray()
 }
 function Get-MaintenanceInventory($Context,[int]$Count) {
     if($Count -lt 1 -or $Count -gt 10000){throw 'Choose a valid number of backups to keep.'}
@@ -242,14 +253,10 @@ function Get-MaintenanceInventory($Context,[int]$Count) {
         if($time -gt [DateTimeOffset]::UtcNow.AddMinutes(10)){throw 'A backup receipt has a future completion time.'}
         $eligible.Add([pscustomobject]@{Id=$s.id;Path=$path;Host=$s.hostname;Time=$time})
     }
-    if($eligible.Count -gt 256){throw 'This preview exceeds the 256 completed-folder limit. Reduce the scope or wait for a newer version.'}
-    $candidates=[Collections.Generic.List[string]]::new()
-    foreach($group in @($eligible|Group-Object {$_.Host.ToUpperInvariant()+'|'+$_.Path.ToUpperInvariant()})) {
-        $ordered=@($group.Group|Sort-Object @{Expression='Time';Descending=$true},@{Expression='Id';Descending=$true})
-        for($index=$Count;$index -lt $ordered.Count;$index++){if(-not $protected.Contains($ordered[$index].Id)){$candidates.Add($ordered[$index].Id)}}
-    }
-    if($candidates.Count -gt 256){throw 'This preview exceeds the 256 backup limit. Choose a larger keep count.'}
-    return [pscustomobject]@{Candidates=$candidates.ToArray();Eligible=$eligible.ToArray();Protected=@($protected);SnapshotCount=$snapshots.Count;PrimaryWire=$primaryWire;ResultsWire=$resultsWire;LocalEvidence=$localEvidence.ToArray()}
+    Assert-MaintenancePreviewLimit $eligible.Count 0
+    $candidates=@(Select-MaintenanceCandidates $eligible.ToArray() $protected $Count)
+    Assert-MaintenancePreviewLimit $eligible.Count $candidates.Count
+    return [pscustomobject]@{Candidates=$candidates;Eligible=$eligible.ToArray();Protected=@($protected);SnapshotCount=$snapshots.Count;PrimaryWire=$primaryWire;ResultsWire=$resultsWire;LocalEvidence=$localEvidence.ToArray()}
 }
 function Get-MaintenanceFingerprint($Inventory) {
     $hash=[Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
@@ -365,6 +372,7 @@ function Invoke-MaintenanceCheck($Context) {
             $result=Invoke-NetCrateProcess $Context.Settings.Tools.Restic @('--repo',$repo,'--no-cache','check') @{RESTIC_PASSWORD=$password} -TimeoutSeconds 86400
             if($result.ExitCode -eq 0){$state='Succeeded';$code='ok';$last=[DateTimeOffset]::UtcNow.ToString('o')}elseif($result.ExitCode -eq 11){$code='locked'}elseif($result.ExitCode -eq 10){$code='unavailable'}elseif($result.ExitCode -eq 12){$code='credentials'}
         } catch [UnauthorizedAccessException] { $code='permission' } catch [IO.DriveNotFoundException] { $code='unavailable' } catch { $code='check-failed' }
+        if($state -ceq 'Failed' -and $code -ceq 'check-failed'){try{if((Get-MaintenanceFreeSpace $Context.Binding.StorageRoot) -eq 0){$code='full'}}catch{}}
         $health[$name]=[ordered]@{State=$state;Code=$code;LastAttemptUtc=$now;LastSuccessUtc=$last;Coverage='Repository metadata and structure; file data was not fully read.'}
         # Persist each result, including a previous success when this attempt fails.
         if($name -ceq 'Primary' -and $old -and $old.PSObject.Properties.Name -ccontains 'Results'){$health.Results=$old.Results}
@@ -376,7 +384,10 @@ function Invoke-NetCrateMaintenanceRequest {
     param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$InstallationId,
         [Parameter(Mandatory)][ValidateSet('CheckStorage','PreviewRetention','ApplyRetention')][string]$Action,
         [Parameter(Mandatory)][hashtable]$Parameters)
-    $context=Get-NetCrateMaintenanceContext $Root $InstallationId
+    if($Action -ceq 'CheckStorage'){
+        $owner=Get-NetCrateOwner $Root
+        if($owner.Role -cne 'Worker' -or $owner.InstallationId -cne $InstallationId){throw 'Open storage controls on the owning Backup Server.'}
+    } else {$owner=(Get-NetCrateMaintenanceContext $Root $InstallationId).Owner}
     $allowed=switch -CaseSensitive ($Action) {'CheckStorage'{@()} 'PreviewRetention'{@('Policy','Count')} 'ApplyRetention'{@('PreviewId','Confirm')}}
     foreach($key in $Parameters.Keys){if($key -cnotin $allowed){throw 'The storage request contains an unsupported field.'}}
     $record=[ordered]@{Version=1;InstallationId=$InstallationId;OperationId=[guid]::NewGuid().ToString('N');Action=$Action;State='Queued';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o')}
@@ -393,7 +404,7 @@ function Invoke-NetCrateMaintenanceRequest {
         if($Parameters.PreviewId -isnot [string] -or $Parameters.PreviewId -cnotmatch '^[a-f0-9]{32}$' -or $Parameters.Confirm -isnot [bool] -or -not $Parameters.Confirm){throw 'Confirm the specific current preview.'}
         $record.PreviewId=$Parameters.PreviewId; $record.Confirm=$true
     }
-    $mutex=[Threading.Mutex]::new($false,('Global\NetCrate-Maintenance-'+$context.Owner.UserSid+'-'+$InstallationId));$held=$false
+    $mutex=[Threading.Mutex]::new($false,('Global\NetCrate-Maintenance-'+$owner.UserSid+'-'+$InstallationId));$held=$false
     try {
         try{$held=$mutex.WaitOne(10000)}catch [Threading.AbandonedMutexException]{$held=$true}
         if(-not $held){throw 'Storage controls are busy. Try again.'}
@@ -415,7 +426,8 @@ function Invoke-NetCrateMaintenanceRequest {
 }
 # Called only by the runtime while holding its installation mutex. Interrupted
 # running operations require attention; they are never silently replayed.
-function Set-MaintenanceCheckFailure([string]$Root,[string]$InstallationId) {
+function Set-MaintenanceCheckFailure([string]$Root,[string]$InstallationId,[string]$Code='check-failed') {
+    if($Code -cnotin @('unavailable','permission','full','check-failed')){$Code='check-failed'}
     $owner=Get-NetCrateOwner $Root
     if($owner.Role -cne 'Worker' -or $owner.InstallationId -cne $InstallationId){throw 'The storage owner is invalid.'}
     $path=[IO.Path]::Combine($Root,'Maintenance','health.json')
@@ -424,7 +436,7 @@ function Set-MaintenanceCheckFailure([string]$Root,[string]$InstallationId) {
     foreach($name in @('Primary','Results')){
         $prior=if($old -and $old.PSObject.Properties.Name -ccontains $name){$old.$name}else{$null}
         $last=if($prior -and $prior.LastSuccessUtc){([DateTimeOffset]$prior.LastSuccessUtc).ToUniversalTime().ToString('o')}else{''}
-        $state[$name]=@{State='Failed';Code='check-failed';LastAttemptUtc=[DateTimeOffset]::UtcNow.ToString('o');LastSuccessUtc=$last;Coverage='Repository metadata and structure; file data was not fully read.'}
+        $state[$name]=@{State='Failed';Code=$Code;LastAttemptUtc=[DateTimeOffset]::UtcNow.ToString('o');LastSuccessUtc=$last;Coverage='Repository metadata and structure; file data was not fully read.'}
     }
     Write-NetCrateJson $path $state
 }
@@ -461,20 +473,41 @@ function Invoke-NetCrateMaintenancePass([string]$Root,[string]$InstallationId,[s
                 $record.State='Succeeded'
             }
         } catch {
-            if($record.Action -ceq 'CheckStorage'){try {Set-MaintenanceCheckFailure $Root $InstallationId} catch {}}
+            if($record.Action -ceq 'CheckStorage'){try {$status=Get-NetCrateMaintenanceStatus $Root $InstallationId;Set-MaintenanceCheckFailure $Root $InstallationId $status.StorageCode} catch {}}
             if($record.State -cne 'NeedsAttention'){$record.State='Failed'}
-            if($record.PSObject.Properties.Name -cnotcontains 'Code'){$code=if($record.Action -ceq 'ApplyRetention'){'preview-stale'}elseif($record.Action -ceq 'PreviewRetention'){'preview-unavailable'}else{'check-unavailable'};$record|Add-Member -NotePropertyName Code -NotePropertyValue $code -Force}
+            if($record.PSObject.Properties.Name -cnotcontains 'Code'){$code=if($record.Action -ceq 'ApplyRetention'){'preview-stale'}elseif($record.Action -ceq 'PreviewRetention' -and $_.Exception.Message -ceq 'netcrate-preview-limit'){'preview-limit'}elseif($record.Action -ceq 'PreviewRetention'){'preview-unavailable'}else{'check-unavailable'};$record|Add-Member -NotePropertyName Code -NotePropertyValue $code -Force}
         }
         Write-NetCrateJson $file $record
         break
     }
 }
+function Get-MaintenanceFreeSpace([string]$StorageRoot) {
+    $null=Get-Item -LiteralPath $StorageRoot -Force -ErrorAction Stop
+    $volume=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($StorageRoot))
+    if(-not $volume.IsReady){throw [IO.DriveNotFoundException]::new('The backup drive is unavailable.')}
+    return $volume.AvailableFreeSpace
+}
 function Get-NetCrateMaintenanceStatus {
     param([Parameter(Mandatory)][string]$Root,[Parameter(Mandatory)][string]$InstallationId)
-    $context=Get-NetCrateMaintenanceContext $Root $InstallationId
-    $volume=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($context.Binding.StorageRoot))
-    if(-not $volume.IsReady){throw 'Reconnect the backup drive and try again.'}
-    $bytes=$volume.AvailableFreeSpace
+    $owner=Get-NetCrateOwner $Root
+    if($owner.Role -cne 'Worker' -or $owner.InstallationId -cne $InstallationId){throw 'Open storage controls on the owning Backup Server.'}
+    $bytes=-1L;$storageCode='unverified'
+    try {
+        $binding=Read-NetCrateJson ([IO.Path]::Combine($Root,'repositories.json')) -MaximumBytes 16384
+        if($binding.Version -ne 1 -or $binding.InstallationId -cne $InstallationId){throw 'The local storage binding is invalid.'}
+        $storage=Assert-NetCrateLocalPath $binding.StorageRoot
+        $expected=Assert-NetCrateLocalPath ([IO.Path]::Combine($storage,'NetCrate-'+$InstallationId))
+        if(-not $expected.Equals($binding.RepositoryRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'The local storage binding is invalid.'}
+        $secret=Unprotect-NetCrateRecord $Root repositories
+        if(-not $secret.StorageRoot.Equals($storage,[StringComparison]::OrdinalIgnoreCase)){throw 'The protected storage binding is invalid.'}
+        $bytes=Get-MaintenanceFreeSpace $storage
+        $storageCode=if($bytes -eq 0){'full'}else{'available'}
+        if(-not [IO.File]::Exists([IO.Path]::Combine($expected,'netcrate-owner.json')) -or -not [IO.File]::Exists([IO.Path]::Combine($expected,'editing','originals','config')) -or -not [IO.File]::Exists([IO.Path]::Combine($expected,'editing','results','config'))){$storageCode='unverified'}
+        if($storageCode -cin @('available','full')){try{$null=Get-NetCrateMaintenanceContext $Root $InstallationId -ConfigTimeoutSeconds 5}catch{$storageCode='unverified'}}
+    } catch [UnauthorizedAccessException] {$storageCode='permission';$bytes=-1L}
+      catch [IO.DriveNotFoundException] {$storageCode='unavailable';$bytes=-1L}
+      catch [System.Management.Automation.ItemNotFoundException] {$storageCode='unavailable';$bytes=-1L}
+      catch {$storageCode='unverified';$bytes=-1L}
     $path=[IO.Path]::Combine($Root,'Maintenance','health.json')
     $health=if([IO.File]::Exists($path)){Read-NetCrateJson $path -MaximumBytes 16384}else{$null}
     if($health -and ($health.Version -ne 1 -or $health.InstallationId -cne $InstallationId)){throw 'The storage health record differs from this installation.'}
@@ -496,6 +529,6 @@ function Get-NetCrateMaintenanceStatus {
         if($preview.Version -ne 1 -or $preview.InstallationId -cne $InstallationId -or $preview.PreviewId -cne $operation.PreviewId -or @($preview.Items).Count -gt 256 -or @($preview.Candidates).Count -gt 256){throw 'A stored preview is invalid.'}
         if(-not $preview.Used -and ([DateTimeOffset]$preview.ExpiresUtc).ToUniversalTime() -gt [DateTimeOffset]::UtcNow){$current=[pscustomobject]@{PreviewId=$preview.PreviewId;ExpiresUtc=$preview.ExpiresUtc;CandidateCount=@($preview.Candidates).Count;EligibleCount=$preview.EligibleCount;ProtectedCount=$preview.ProtectedCount;NewestRetainedUtc=$preview.NewestRetainedUtc;Items=@($preview.Items)};break}
     }
-    return [pscustomobject]@{FreeBytes=$bytes;LowSpace=($bytes -lt 5GB);Health=$health;Operations=$operations;Preview=$current}
+    return [pscustomobject]@{FreeBytes=$bytes;LowSpace=($bytes -ge 0 -and $bytes -lt 5GB);StorageCode=$storageCode;Health=$health;Operations=$operations;Preview=$current}
 }
 Export-ModuleMember -Function Get-NetCrateMaintenanceContext, Invoke-NetCrateMaintenanceRequest, Get-NetCrateMaintenanceStatus, Invoke-NetCrateMaintenancePass

@@ -39,10 +39,12 @@ try {
                 Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { '' }) }
             $settings = Import-NetCrateSettings ([IO.Path]::Combine($Root, 'settings.json')) $owner.Role
             if ($owner.Role -ceq 'Worker') {
-                Start-NetCrateOwnedEndpoint $endpointState $Root $settings
+                # Drain a queued health request even when an offline drive prevents
+                # the endpoint from starting. Apply still proves quiescence itself.
                 $quiesce={Stop-NetCrateOwnedEndpoint $endpointState $Root}.GetNewClosure()
                 $resume={Start-NetCrateOwnedEndpoint $endpointState $Root $settings}.GetNewClosure()
                 Invoke-NetCrateMaintenancePass $Root $owner.InstallationId $quiesce $resume
+                Start-NetCrateOwnedEndpoint $endpointState $Root $settings
                 if ($settings.BackupMode -ceq 'Media' -and -not ($settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $settings.SourceBackupMode -ceq 'Folder')) { Invoke-NetCrateWorker $Root $settings }
             } else {
                 $scheduleStatus = Invoke-NetCrateSchedules $Root $settings

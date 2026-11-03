@@ -8,11 +8,11 @@ using System.Windows.Automation;
 using NetCrate;
 using NetCrate.Setup;
 class FakeMaintenance : IMaintenanceService {
- public string Action,FailAction,ThrowAction; public MaintenanceRequest Request;
+ public string Action,FailAction,ThrowAction,StorageCode="available"; public MaintenanceRequest Request; public List<MaintenanceOperation> Operations=new List<MaintenanceOperation>();
  public Task<SetupResult> InvokeMaintenanceAsync(string action,MaintenanceRequest request,CancellationToken token){
   Action=action;Request=request;if(action==ThrowAction)throw new Exception("private diagnostic");
   if(action==FailAction)return Task.FromResult(SetupResult.ActionRequired("fixture","Choose a valid policy."));
-  var r=SetupResult.Done("Refreshed");r.Maintenance=new MaintenanceStatus{Preview=new MaintenancePreview{PreviewId="abc",CandidateCount=1,Items=new List<MaintenanceItem>()},Operations=new List<MaintenanceOperation>()};return Task.FromResult(r);
+  var r=SetupResult.Done("Refreshed");r.Maintenance=new MaintenanceStatus{StorageCode=StorageCode,FreeBytes=StorageCode=="unavailable"?-1:1024,Health=new MaintenanceHealth{Primary=new MaintenanceCheck{State="Failed",LastAttemptUtc="2026-11-03T05:00:00Z",LastSuccessUtc="2026-01-02T03:04:05Z"}},Preview=new MaintenancePreview{PreviewId="abc",CandidateCount=1,Items=new List<MaintenanceItem>()},Operations=Operations};return Task.FromResult(r);
  }
 }
 class MaintenanceViewTests {
@@ -33,8 +33,19 @@ class MaintenanceViewTests {
    service.FailAction=null;service.ThrowAction=null;view.RefreshStatusAsync().GetAwaiter().GetResult();
    if(choice.SelectedIndex!=1||count.Text!="3"||editor.Message!=error)throw new Exception("Polling discarded an error or unsaved policy.");
   }
+  service.StorageCode="unavailable";view.RefreshStatusAsync().GetAwaiter().GetResult();
+  if(!Find<TextBlock>(view).Exists(t=>t.Text.Contains("Reconnect the backup drive")&&t.Text.Contains("2026-01-02T03:04:05Z")))throw new Exception("Offline dialog hid the prior successful check.");
+  service.StorageCode="unverified";view.RefreshStatusAsync().GetAwaiter().GetResult();
+  if(preview.IsEnabled||confirm.IsEnabled||!check.IsEnabled)throw new Exception("Unverified storage enabled retention or disabled health checks.");
+  service.StorageCode="available";view.RefreshStatusAsync().GetAwaiter().GetResult();
   confirm.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
   if(service.Action!="ApplyRetention"||service.Request.PreviewId!="abc"||!service.Request.Confirm)throw new Exception("Confirmation was not explicit and bound to preview.");
+  service.Operations=new List<MaintenanceOperation>{new MaintenanceOperation{Action="ApplyRetention",State="Succeeded",CreatedUtc="2026-11-03T05:00:00Z"},new MaintenanceOperation{Action="PreviewRetention",State="Failed",Code="preview-limit",CreatedUtc="2026-11-03T04:59:00Z"}};
+  view.RefreshStatusAsync().GetAwaiter().GetResult();
+  if(!Find<TextBlock>(view).Exists(t=>t.Text.Contains("Retention: completed")&&t.Text.Contains("256")&&t.Text.Contains("newer build")))throw new Exception("Recent success or actionable limit was hidden after polling.");
+  var reopened=new MaintenanceView(new MaintenanceEditor(service),p=>true);reopened.RefreshStatusAsync().GetAwaiter().GetResult();
+  if(!Find<TextBlock>(reopened).Exists(t=>t.Text.Contains("Retention: completed")&&t.Text.Contains("256")))throw new Exception("Recent terminal outcome was hidden after reopen.");
+  reopened.Close();
   view.Close();app.Shutdown();Console.WriteLine("PASS: maintenance default, buttons, explicit confirmation and persistent errors.");
  }
 }
