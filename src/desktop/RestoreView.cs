@@ -122,8 +122,11 @@ namespace NetCrate {
                 restoring=true;try{await RunAsync(()=>browser.RestoreAsync(parent,cancellation.Token));}finally{restoring=false;}
             }
         }
+        internal static OpenFileDialog CreateRecoveryOpenDialog() {
+            return new OpenFileDialog {Title="Choose your saved NetCrate recovery file",Filter="NetCrate recovery files (*.netcrate;*.json)|*.netcrate;*.json|All files (*.*)|*.*",CheckFileExists=true};
+        }
         public static void OpenRecovery(Window owner,IRestoreService service) {
-            OpenFileDialog file=new OpenFileDialog {Title="Choose your saved NetCrate recovery file",Filter="NetCrate recovery file (*.json)|*.json",CheckFileExists=true};
+            OpenFileDialog file=CreateRecoveryOpenDialog();
             if(file.ShowDialog(owner)!=true)return;
             using(Forms.FolderBrowserDialog folder=new Forms.FolderBrowserDialog {Description="Choose the originals folder on your connected backup drive",ShowNewFolderButton=false}) {
                 if(folder.ShowDialog()!=Forms.DialogResult.OK)return;

@@ -26,6 +26,8 @@ class InspectionTests
 
     static async Task Run()
     {
+        Assert(InspectionProcess.TimeoutFor("ListBackups") > TimeSpan.FromSeconds(120), "Browse action deadline is shorter than a single allowed native metadata call.");
+        Assert(InspectionProcess.TimeoutFor("ListBackupChildren") == InspectionProcess.TimeoutFor("ListBackups") && InspectionProcess.TimeoutFor("ListBackups") < TimeSpan.FromMinutes(40), "Browse actions do not share a bounded coordinated deadline.");
         Stopwatch elapsed = Stopwatch.StartNew();
         using (Process child = StartFixture())
         {
@@ -44,7 +46,7 @@ class InspectionTests
         using (CancellationTokenSource cancel = new CancellationTokenSource(200))
         {
             bool cancelled = false;
-            try { await InspectionProcess.WaitAsync(child, TimeSpan.FromSeconds(30), cancel.Token); }
+            try { await InspectionProcess.WaitAsync(child, InspectionProcess.TimeoutFor("ListBackups"), cancel.Token); }
             catch (OperationCanceledException) { cancelled = true; }
             Assert(cancelled && child.HasExited, "Cancelling inspection left its process running.");
         }

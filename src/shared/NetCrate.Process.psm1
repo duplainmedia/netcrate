@@ -15,6 +15,7 @@ function Invoke-NetCrateProcess {
     $start.RedirectStandardInput = $null -ne $InputText
     $start.StandardOutputEncoding = [Text.Encoding]::UTF8
     $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+    if ($start.RedirectStandardInput) { $start.StandardInputEncoding = [Text.UTF8Encoding]::new($false) }
     foreach ($key in @($start.Environment.Keys)) {
         if ($key -match '^(?i:RESTIC_|RCLONE_|AWS_|AZURE_|B2_|GOOGLE_|PYTHONPATH$|PYTHONHOME$|HTTPS?_PROXY$|ALL_PROXY$)') { $null = $start.Environment.Remove($key) }
     }
@@ -34,35 +35,75 @@ function Invoke-NetCrateProcess {
     try {
         $null = $process.Start()
         $start.Environment.Clear()
-        if ($null -ne $InputText) { $process.StandardInput.Write($InputText); $process.StandardInput.Close() }
-        $errors = $process.StandardError.ReadToEndAsync()
-        $lineTask = $process.StandardOutput.ReadLineAsync()
-        $watch = [Diagnostics.Stopwatch]::StartNew()
-        while ($true) {
-            if ($watch.Elapsed.TotalSeconds -gt $TimeoutSeconds) { $process.Kill($true); throw 'The operation timed out. Its work was retained for retry.' }
-            if (-not $lineTask.IsCompleted) { Start-Sleep -Milliseconds 40; continue }
-            $line = $lineTask.GetAwaiter().GetResult()
-            if ($null -eq $line) { break }
-            if ($writer) {
-                $writer.WriteLine($line)
-                if ($line -match '"message_type"\s*:\s*"summary"') { $null = $output.AppendLine($line) }
-            } else {
-                $null = $output.AppendLine($line)
-                if ($output.Length -gt 67108864) { $process.Kill($true); throw 'The tool returned more metadata than expected.' }
+        # Read both pipes in fixed character chunks: neither an unterminated line nor
+        # an undrained diagnostic pipe may allocate an unbounded managed string.
+        $maximumOutput=67108864; $maximumDiagnostic=1048576; $maximumLogLine=1048576
+        $diagnostics=[Text.StringBuilder]::new();$pending=[Text.StringBuilder]::new()
+        $stdoutBuffer=[char[]]::new(8192);$stderrBuffer=[char[]]::new(8192)
+        $stdout=$process.StandardOutput.ReadAsync($stdoutBuffer,0,$stdoutBuffer.Length)
+        $stderr=$process.StandardError.ReadAsync($stderrBuffer,0,$stderrBuffer.Length)
+        $stdin=$null
+        if($null -ne $InputText){$stdin=$process.StandardInput.WriteAsync($InputText)}
+        $watch=[Diagnostics.Stopwatch]::StartNew()
+        while($null -ne $stdout -or $null -ne $stderr -or -not $process.HasExited) {
+            if($watch.Elapsed.TotalSeconds -gt $TimeoutSeconds){throw 'The operation timed out. Its work was retained for retry.'}
+            $progressed=$false
+            if($null -ne $stdin -and $stdin.IsCompleted){$null=$stdin.GetAwaiter().GetResult();$process.StandardInput.Close();$stdin=$null}
+            if($null -ne $stdout -and $stdout.IsCompleted) {
+                $count=$stdout.GetAwaiter().GetResult();$progressed=$true
+                if($count -eq 0){$stdout=$null}
+                else {
+                    $chunk=[string]::new($stdoutBuffer,0,$count)
+                    if($writer) {
+                        $writer.Write($chunk)
+                        $parts=$chunk.Split("`n")
+                        for($i=0;$i -lt $parts.Length;$i++) {
+                            if($pending.Length+$parts[$i].Length -gt $maximumLogLine){throw 'The tool returned a line exceeding the metadata limit.'}
+                            $null=$pending.Append($parts[$i])
+                            if($i -lt $parts.Length-1) {
+                                if($pending.ToString() -match '"message_type"\s*:\s*"summary"') {
+                                    if($output.Length+$pending.Length+1 -gt $maximumOutput){throw 'The tool returned more metadata than expected.'}
+                                    $null=$output.AppendLine($pending.ToString().TrimEnd("`r"))
+                                }
+                                $null=$pending.Clear()
+                            }
+                        }
+                    } else {
+                        if($output.Length+$count -gt $maximumOutput){throw 'The tool returned more metadata than expected.'}
+                        $null=$output.Append($chunk)
+                    }
+                    $stdout=$process.StandardOutput.ReadAsync($stdoutBuffer,0,$stdoutBuffer.Length)
+                }
             }
-            $lineTask = $process.StandardOutput.ReadLineAsync()
+            if($null -ne $stderr -and $stderr.IsCompleted) {
+                $count=$stderr.GetAwaiter().GetResult();$progressed=$true
+                if($count -eq 0){$stderr=$null}
+                else {
+                    if($diagnostics.Length+$count -gt $maximumDiagnostic){throw 'The tool returned more diagnostic output than expected.'}
+                    $null=$diagnostics.Append($stderrBuffer,0,$count)
+                    $stderr=$process.StandardError.ReadAsync($stderrBuffer,0,$stderrBuffer.Length)
+                }
+            }
+            if(-not $progressed) {
+                $waiting=[Collections.Generic.List[Threading.Tasks.Task]]::new()
+                if($null -ne $stdout){$waiting.Add($stdout)}
+                if($null -ne $stderr){$waiting.Add($stderr)}
+                if($waiting.Count){$null=[Threading.Tasks.Task]::WaitAny($waiting.ToArray(),50)}
+                else{$null=$process.WaitForExit(10)}
+            }
         }
-        $remaining = [Math]::Max(1, [int](($TimeoutSeconds - $watch.Elapsed.TotalSeconds) * 1000))
-        if (-not $process.WaitForExit($remaining)) { $process.Kill($true); throw 'The operation timed out.' }
-        if (-not $errors.Wait(5000)) { throw 'The tool did not close its diagnostic output.' }
-        $diagnostic = $errors.GetAwaiter().GetResult()
+        if($writer -and $pending.Length -and $pending.ToString() -match '"message_type"\s*:\s*"summary"') {
+            if($output.Length+$pending.Length -gt $maximumOutput){throw 'The tool returned more metadata than expected.'}
+            $null=$output.AppendLine($pending.ToString())
+        }
+        $diagnostic=$diagnostics.ToString()
         foreach ($key in $Environment.Keys) {
-            if ($key -match 'PASSWORD|TOKEN|SECRET') { $diagnostic = $diagnostic.Replace([string]$Environment[$key], '[redacted]') }
+            if ($key -match 'PASSWORD|TOKEN|SECRET' -and [string]$Environment[$key]) { $diagnostic = $diagnostic.Replace([string]$Environment[$key], '[redacted]') }
         }
         return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output.ToString(); Diagnostic = $diagnostic }
     } finally {
         if ($writer) { $writer.Dispose() }
-        try { if (-not $process.HasExited) { $process.Kill($true) } } catch [InvalidOperationException] { }
+        try { if (-not $process.HasExited) { $process.Kill($true); $null=$process.WaitForExit(5000) } } catch [InvalidOperationException] { }
         $process.Dispose()
     }
 }

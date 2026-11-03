@@ -40,7 +40,7 @@ Linked paths, online-only or offline placeholders and folders overlapping NetCra
 
 ## Restore files
 
-On the source dashboard, choose **Restore files**. Choose a dated backup, then double-click a folder (or press Enter) to browse its immediate contents. The breadcrumb returns to the whole backup or any parent folder. Select one file or folder, or leave nothing selected to restore the folder shown in the breadcrumb. **More** loads another page when needed.
+On the source dashboard, choose **Restore files**. Choose a dated backup, then double-click a folder (or press Enter) to browse its immediate contents. The breadcrumb returns to the whole backup or any parent folder. Select one file or folder, or leave nothing selected to restore the folder shown in the breadcrumb. **More** loads another page when needed. Each date page checks at most 50 candidate backups; opening a date checks that backup directly. Browsing can be cancelled by closing its window. A slow browse has a 30-minute total budget, shared by its metadata reads; reconnect the drive or private connection and choose Refresh if it times out.
 
 Choose **Restore to a new folder**, select an existing local parent folder, then review the source, backup date, selection and new folder name. NetCrate restores privately, verifies the file bytes and publishes a separate `Recovered-…` folder. Existing files are preserved; a name collision gets a new suffix. The completed screen shows the verified output location and **Open recovered folder**. Keep the window open during restoration; large restores can take a long time. If a drive disconnects or verification fails, reconnect it and retry. Nothing is merged into an existing folder.
 

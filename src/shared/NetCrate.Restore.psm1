@@ -21,13 +21,29 @@ function Test-RestoreOverlap([string]$Left,[string]$Right) {
     $a=$Left.TrimEnd('\');$b=$Right.TrimEnd('\')
     return $a.Equals($b,[StringComparison]::OrdinalIgnoreCase) -or $a.StartsWith($b+'\',[StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a+'\',[StringComparison]::OrdinalIgnoreCase)
 }
+function Get-RestoreNativeTimeout($Context,[string[]]$Arguments) {
+    $seconds=if($Arguments[0] -ceq 'restore' -or ($Arguments[0] -ceq 'dump' -and $Arguments -ccontains '--target')){86400}else{120}
+    $deadline=Get-RestoreField $Context BrowseDeadlineUtc
+    if($deadline) {
+        $remaining=([DateTimeOffset]$deadline-[DateTimeOffset]::UtcNow).TotalSeconds
+        if($remaining -lt 1){throw 'Reading the backup took too long. Reconnect the drive or private connection, then choose Refresh. You can cancel browsing and try again later.'}
+        $seconds=[int][Math]::Min($seconds,[Math]::Floor($remaining))
+    }
+    return $seconds
+}
 function Invoke-RestoreNative($Context,[string[]]$Arguments) {
-    $timeout=if($Arguments[0] -ceq 'restore' -or ($Arguments[0] -ceq 'dump' -and $Arguments -ccontains '--target')){86400}else{120}
-    $r=Invoke-NetCrateProcess $Context.Restic (@('--repo',$Context.Repository,'--no-cache','--no-lock')+$Context.Options+$Arguments) $Context.Environment -TimeoutSeconds $timeout
+    $timeout=Get-RestoreNativeTimeout $Context $Arguments
+    try { $r=Invoke-NetCrateProcess $Context.Restic (@('--repo',$Context.Repository,'--no-cache','--no-lock')+$Context.Options+$Arguments) $Context.Environment -TimeoutSeconds $timeout }
+    catch {
+        if((Get-RestoreField $Context BrowseDeadlineUtc) -and $_.Exception.Message -match 'timed out') {
+            throw 'Reading the backup took too long. Reconnect the drive or private connection, then choose Refresh. You can cancel browsing and try again later.'
+        }
+        throw
+    }
     if($r.ExitCode -ne 0){throw 'The originals repository could not be read or verified. Check the recovery file, repository and available space, then try again.'}
     return $r.Output
 }
-function New-RestoreContext($Request,[string]$Root,[string]$ResticExe) {
+function New-RestoreContext($Request,[string]$Root,[string]$ResticExe,[string]$Action='ListBackups') {
     $independent=[bool](Get-RestoreField $Request RecoveryFile)
     $options=@();$forbidden=@($Root,[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')));$hostName='';$active=''
     if($independent) {
@@ -60,7 +76,13 @@ function New-RestoreContext($Request,[string]$Root,[string]$ResticExe) {
         $hostName=$settings.SourceComputer;$active=$settings.ActiveRoot;$forbidden+=@($active)
     }
     if(-not [IO.File]::Exists($ResticExe)){throw 'The recovery tool is unavailable. Reopen a complete NetCrate build and try again.'}
-    $c=[pscustomobject]@{Restic=$ResticExe;Repository=$repository;Id=$id;Environment=$environment;Options=$options;Forbidden=$forbidden;HostName=$hostName;ActiveRoot=$active}
+    $deadline=$null
+    if($Action -cne 'RestoreSelection') {
+        $deadline=[DateTimeOffset]::UtcNow.AddMinutes(30)
+        $requested=Get-RestoreField $Request BrowseDeadlineUtc
+        if($requested){$requested=[DateTimeOffset]$requested;if($requested -lt $deadline){$deadline=$requested}}
+    }
+    $c=[pscustomobject]@{BrowseDeadlineUtc=$deadline;Restic=$ResticExe;Repository=$repository;Id=$id;Environment=$environment;Options=$options;Forbidden=$forbidden;HostName=$hostName;ActiveRoot=$active}
     $config=Invoke-RestoreNative $c @('cat','config')|ConvertFrom-Json
     if($config.id -cne $id){throw 'This repository does not match the recovery file or source installation. Choose the matching originals repository.'}
     return $c
@@ -82,10 +104,18 @@ function Get-RestoreTree($Context,[string]$Tree) {
     Assert-NetCrateRestoreNodes $nodes
     return $nodes
 }
-function Get-RestoreBackups($Context) {
-    $snapshots=@(Invoke-RestoreNative $Context @('snapshots','--json')|ConvertFrom-Json)
+function Get-RestoreBackups($Context,[string]$SnapshotId='', [int]$Offset=0) {
+    $query=@('snapshots','--json');if($SnapshotId){$query+=@($SnapshotId)}
+    $snapshots=@(Invoke-RestoreNative $Context $query|ConvertFrom-Json)
     if($snapshots.Count -gt 20000){throw 'The backup list is too large. Use repository maintenance before browsing.'}
-    foreach($s in $snapshots) {
+    $candidates=@($snapshots|Where-Object {
+        $tags=@(Get-RestoreField $_ tags @())
+        ($tags -ccontains 'netcrate-originals' -or $tags -ccontains 'netcrate-folder-originals') -and $tags -cnotcontains 'netcrate-backup-receipt'
+    }|Sort-Object time,id -Descending)
+    if($Offset -gt $candidates.Count){throw 'Refresh this list to continue browsing.'}
+    $end=[Math]::Min($Offset+50,$candidates.Count)
+    $selected=@();if($end -gt $Offset){$selected=@($candidates[$Offset..($end-1)])}
+    $items=@(foreach($s in $selected) {
         $tags=@(Get-RestoreField $s tags @())
         if($s.id -cnotmatch '^[a-f0-9]{64}$' -or @($s.paths).Count -ne 1 -or
             ($tags -cnotcontains 'netcrate-originals' -and $tags -cnotcontains 'netcrate-folder-originals') -or
@@ -96,7 +126,9 @@ function Get-RestoreBackups($Context) {
         $mode=if($tags -ccontains 'netcrate-folder-originals'){'Folder'}else{'Media'}
         $completion='Unknown (legacy)';$date=([DateTimeOffset]$s.time).UtcDateTime.ToString('o')
         $receiptTag='netcrate-receipt-'+$s.id
-        $receipts=@($snapshots|Where-Object { @((Get-RestoreField $_ tags @())) -ccontains $receiptTag })
+        $receipts=if($SnapshotId){@(Invoke-RestoreNative $Context @('snapshots','--json','--host',$s.hostname,'--tag',$receiptTag)|ConvertFrom-Json)}
+            else{@($snapshots|Where-Object { @((Get-RestoreField $_ tags @())) -ccontains $receiptTag })}
+        if(@($receipts).Count -gt 1000){throw 'This backup has too many completion records. Choose another backup and check storage maintenance.'}
         $valid=$false
         foreach($rs in $receipts) {
             try {
@@ -114,12 +146,13 @@ function Get-RestoreBackups($Context) {
                     $r.SourceComputer -cne $s.hostname -or (Convert-RestoreProject $r.Project) -cne $project -or $r.SnapshotId -cne $s.id -or
                     $r.BackupMode -cne $mode -or $r.JobId -isnot [string] -or $r.JobId -cnotmatch '^[a-zA-Z0-9_-]{1,128}$'){continue}
                 $date=([DateTimeOffset]$r.BackupCompletedUtc).UtcDateTime.ToString('o');$valid=$true
-            } catch {continue}
+            } catch { $null=Get-RestoreNativeTimeout $Context @('cat','config'); continue }
         }
         if($tags -ccontains 'netcrate-v2-originals' -and -not $valid){continue}
         if($valid){$completion='Complete'}
         [pscustomobject]@{SnapshotId=$s.id;Project=$project;SourceComputer=$s.hostname;BackupCompletedUtc=$date;BackupMode=$mode;Completion=$completion;Name=($project+' · '+([DateTimeOffset]$date).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')+' · '+$completion);RelativePath='';Type='dir'}
-    }
+    })
+    return [pscustomobject]@{Items=$items;NextCursor=if($end -lt $candidates.Count){[string]$end}else{''}}
 }
 function Get-RestoreSelection($Context,$Backup,[string]$RelativePath) {
     if($RelativePath){$null=Assert-NetCrateRelativePath $RelativePath;if($RelativePath.EndsWith('/')){throw 'Choose an exact backup path.'}}
@@ -208,17 +241,19 @@ function Assert-RestoreDestination($Context,[string]$Path,[string]$Project) {
 }
 function Invoke-NetCrateRestoreAction {
     param([ValidateSet('ListBackups','ListBackupChildren','RestoreSelection')][string]$Action,$Request,[string]$Root,[string]$ResticExe)
-    $context=New-RestoreContext $Request $Root $ResticExe
+    $context=New-RestoreContext $Request $Root $ResticExe $Action
     try {
-        $backups=@(Get-RestoreBackups $context|Sort-Object BackupCompletedUtc,SnapshotId -Descending)
         $items=@();$cursor=[string](Get-RestoreField $Request Cursor)
         if($cursor -and $cursor -cnotmatch '^(0|[1-9][0-9]{0,6})$'){throw 'Refresh this list to continue browsing.'}
         $offset=if($cursor){[int]$cursor}else{0}
-        if($Action -ceq 'ListBackups'){$items=$backups}
+        if($Action -ceq 'ListBackups'){
+            $page=Get-RestoreBackups $context '' $offset
+            return @{Succeeded=$true;Code='ok';Message=if(@($page.Items).Count){'Choose a dated backup.'}elseif($page.NextCursor){'No completed backups on this page. Choose More to continue.'}else{'No completed originals were found in this repository.'};Items=@($page.Items);NextCursor=$page.NextCursor}
+        }
         else {
             $id=[string](Get-RestoreField $Request SnapshotId)
             if($id -cnotmatch '^[a-f0-9]{64}$'){throw 'Choose an exact dated backup.'}
-            $found=@($backups|Where-Object SnapshotId -CEQ $id)
+            $found=@((Get-RestoreBackups $context $id).Items|Where-Object SnapshotId -CEQ $id)
             if($found.Count -ne 1){throw 'This backup has no valid completion evidence or does not belong to this source. Refresh and choose another date.'}
             $backup=$found[0];$relative=[string](Get-RestoreField $Request RelativePath)
             $selected=Get-RestoreSelection $context $backup $relative

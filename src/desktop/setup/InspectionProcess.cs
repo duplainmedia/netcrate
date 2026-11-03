@@ -8,6 +8,11 @@ namespace NetCrate.Setup
 {
     internal static class InspectionProcess
     {
+        internal static TimeSpan BrowseBudget { get { return TimeSpan.FromMinutes(30); } }
+        internal static TimeSpan TimeoutFor(string action) {
+            if (action == "ListBackups" || action == "ListBackupChildren") return BrowseBudget + TimeSpan.FromSeconds(10);
+            return TimeSpan.FromSeconds(action == "CheckSample" ? 1250 : 90);
+        }
         internal static async Task<bool> WaitAsync(Process process, TimeSpan timeout, CancellationToken token)
         {
             Stopwatch elapsed = Stopwatch.StartNew();

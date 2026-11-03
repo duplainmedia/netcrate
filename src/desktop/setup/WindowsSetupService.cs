@@ -88,7 +88,7 @@ namespace NetCrate.Setup
             Directory.CreateDirectory(setupRoot);
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
             object payload = restore == null ? (object)new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }
-                : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor };
+                : new { Version = 1, InstallationId = restore.InstallationId, Role = "EditingComputer", RecoveryFile = restore.RecoveryFile, RepositoryPath = restore.RepositoryPath, SnapshotId = restore.SnapshotId, RelativePath = restore.RelativePath, DestinationParent = restore.DestinationParent, Cursor = restore.Cursor, BrowseDeadlineUtc = action == "ListBackups" || action == "ListBackupChildren" ? DateTime.UtcNow.Add(InspectionProcess.BrowseBudget).ToString("o") : null };
             File.WriteAllText(input, json.Serialize(payload), new UTF8Encoding(false));
             try
             {
@@ -112,9 +112,12 @@ namespace NetCrate.Setup
                     // Recovery also waits through native verification/publication and owned staging cleanup.
                     if (action != "Prepare" && action != "Network" && action != "ConfirmConnection" && action != "RestoreSelection")
                     {
-                        bool finished = await InspectionProcess.WaitAsync(process, TimeSpan.FromSeconds(action == "CheckSample" ? 1250 : 90), token);
-                        if (!finished)
+                        bool finished = await InspectionProcess.WaitAsync(process, InspectionProcess.TimeoutFor(action), token);
+                        if (!finished) {
+                            if (action == "ListBackups" || action == "ListBackupChildren")
+                                return SetupResult.ActionRequired("backup-browse-timeout", "Reading the backup took too long. Reconnect the drive or private connection, then choose Refresh. You can cancel browsing and try again later.");
                             return SetupResult.ActionRequired("probe-timeout", "A software check took too long. Close other installers, then choose Try again.");
+                        }
                     }
                     else await Task.Run(() => process.WaitForExit());
                     string text = await output;

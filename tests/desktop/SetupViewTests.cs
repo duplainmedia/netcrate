@@ -18,6 +18,12 @@ class SetupViewTests
         SetupController controller = new SetupController(new WindowsSetupService(@"C:\No-Setup-Engine"), new MemoryStore());
         SetupView view = new SetupView(controller);
         Assert(Find<Button>(view).Exists(b => AutomationProperties.GetName(b) == "Recover from a recovery file"), "Independent recovery is unreachable before setup.");
+        // Compare the actual production Save and Open dialog contracts, including their extension defaults.
+        Microsoft.Win32.SaveFileDialog saved = SetupView.CreateRecoverySaveDialog();
+        Microsoft.Win32.OpenFileDialog opened = NetCrate.RestoreView.CreateRecoveryOpenDialog();
+        string exported = System.IO.Path.ChangeExtension(saved.FileName, saved.DefaultExt);
+        string extension = System.IO.Path.GetExtension(exported);
+        Assert(opened.Filter.Contains("*" + extension), "The recovery picker hides the extension exported by setup.");
         List<RadioButton> roles = Find<RadioButton>(view);
         Assert(roles.Count == 2, "Computer choices do not expose radio selection semantics.");
         RadioButton editing = roles[0];

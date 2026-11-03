@@ -400,9 +400,12 @@ namespace NetCrate.Setup
             finally { checkingSoftware = false; }
         }
 
+        internal static SaveFileDialog CreateRecoverySaveDialog() {
+            return new SaveFileDialog { Title = "Save recovery details", FileName = "NetCrate recovery", DefaultExt = ".netcrate", Filter = "NetCrate recovery|*.netcrate" };
+        }
         private async void SaveRecovery()
         {
-            SaveFileDialog picker = new SaveFileDialog { Title = "Save recovery details", FileName = "NetCrate recovery", DefaultExt = ".netcrate", Filter = "NetCrate recovery|*.netcrate" };
+            SaveFileDialog picker = CreateRecoverySaveDialog();
             if (picker.ShowDialog(this) == true)
                 await RunSafeAsync(() => controller.SaveRecoveryAsync(picker.FileName, CheckToken));
         }
