@@ -34,6 +34,14 @@ class SetupViewTests
         roles = Find<RadioButton>(view);
         Assert(controller.State.Role == ComputerRole.BackupServer && roles[1].IsChecked == true && roles[0].IsChecked == false,
             "Changing roles did not expose one selected computer choice.");
+        controller.Continue();
+        List<RadioButton> modes=Find<RadioButton>(view);
+        Assert(modes.Count==2,"The server cannot choose folder-only capability before preparation.");
+        RadioButton media=modes.Find(r=>AutomationProperties.GetName(r)=="Backups and media processing");
+        Assert(media!=null,"The optional media choice is not accessible.");
+        peer=UIElementAutomationPeer.CreatePeerForElement(media);
+        ((ISelectionItemProvider)peer.GetPattern(PatternInterface.SelectionItem)).Select();
+        Assert(controller.State.BackupMode=="Media","Clicking media capability did not change the setup request.");
         view.Close();
         app.Shutdown();
         Console.WriteLine("PASS: " + assertions + " native role accessibility assertions.");

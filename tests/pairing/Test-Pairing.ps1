@@ -59,3 +59,33 @@ $badScope | ConvertTo-Json | Set-Content -LiteralPath $protectedFile -Encoding U
 Reject { New-NetCrateIdentity -Root $other -InstallationId ('3'*32) -Role Source }
 [IO.File]::WriteAllText($protectedFile, $protectedBefore, [Text.UTF8Encoding]::new($false))
 Write-Output "PASS: $script:assertions recipient-bound pairing assertions."
+# A mode downgrade or unsigned mode must never change requested capability.
+$folderSource=Join-Path $TestRoot 'FolderSource'; $folderServer=Join-Path $TestRoot 'FolderServer'
+$null=New-NetCrateIdentity $folderSource ('4'*32) Source; $null=New-NetCrateIdentity $folderServer ('5'*32) Worker
+$folderRequest=New-NetCratePairingRequest -Root $folderSource -SourceComputer 'FOLDER-PC' -ProjectRoot 'F:\Files' -NetworkAddress '100.64.0.10' -BackupMode Folder
+Assert ($folderRequest.Version -eq 2 -and $folderRequest.BackupMode -ceq 'Folder') 'New pairing does not carry a signed mode.'
+$tampered=$folderRequest | ConvertTo-Json | ConvertFrom-Json; $tampered.BackupMode='Media'
+Reject { Import-NetCratePairingRequest $folderServer $tampered -BackupMode Media }
+$tampered=$folderRequest | ConvertTo-Json | ConvertFrom-Json; $tampered.Version=1; $tampered.PSObject.Properties.Remove('BackupMode')
+Reject { Import-NetCratePairingRequest $folderServer $tampered }
+$legacyTamper=$request | ConvertTo-Json | ConvertFrom-Json; $legacyTamper | Add-Member BackupMode Folder
+Reject { Import-NetCratePairingRequest $folderServer $legacyTamper }
+Reject { Import-NetCratePairingRequest $folderServer $request -BackupMode Folder }
+$accepted=Import-NetCratePairingRequest $folderServer $folderRequest -BackupMode Folder
+Confirm-NetCratePairingRequest $folderServer $folderRequest.RequestId $accepted.DeviceCode
+$folderReply=New-NetCratePairingReply $folderServer $payload
+$badReply=$folderReply | ConvertTo-Json | ConvertFrom-Json;$badReply.BackupMode='Media'
+Reject { Import-NetCratePairingReply $folderSource $badReply }
+$pending=Import-NetCratePairingReply $folderSource $folderReply
+$null=Confirm-NetCratePairingReply $folderSource $pending.ConnectionCode
+$folderSecrets=Get-NetCratePairedSecrets $folderSource
+Assert ($folderSecrets.BackupMode -ceq 'Folder' -and $folderSecrets.ServerBackupMode -ceq 'Folder') 'The encrypted reply did not bind requested mode and server capability.'
+$mediaRequest=New-NetCratePairingRequest -Root $folderSource -SourceComputer 'FOLDER-PC' -ProjectRoot 'F:\Files' -NetworkAddress '100.64.0.10' -BackupMode Media
+Reject { Import-NetCratePairingRequest $folderServer $mediaRequest -BackupMode Folder }
+$accepted=Import-NetCratePairingRequest $folderServer $mediaRequest -BackupMode Media
+Confirm-NetCratePairingRequest $folderServer $mediaRequest.RequestId $accepted.DeviceCode
+$mediaReply=New-NetCratePairingReply $folderServer $payload
+$pending=Import-NetCratePairingReply $folderSource $mediaReply
+$null=Confirm-NetCratePairingReply $folderSource $pending.ConnectionCode
+Assert ((Get-NetCratePairedSecrets $folderSource).BackupMode -ceq 'Media') 'An explicit v2 Media pair could not complete.'
+Write-Output "PASS: $script:assertions total pairing assertions including signed mode downgrade and capability."

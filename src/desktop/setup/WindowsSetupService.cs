@@ -84,7 +84,7 @@ namespace NetCrate.Setup
                 return SetupResult.ActionRequired("setup-folder-linked", "The NetCrate setup folder contains a link. Check the folder before trying again.");
             Directory.CreateDirectory(setupRoot);
             string input = Path.Combine(setupRoot, "action-" + Guid.NewGuid().ToString("N") + ".json");
-            File.WriteAllText(input, json.Serialize(new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }));
+            File.WriteAllText(input, json.Serialize(new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, NetworkAddress = state.NetworkAddress, Path = path, PairingCode = code }));
             try
             {
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\WindowsPowerShell\v1.0\powershell.exe");

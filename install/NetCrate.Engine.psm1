@@ -145,6 +145,7 @@ function Get-NetCrateInstallerCache([string]$Root) {
 }
 
 function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot) {
+    $mode = Get-NetCrateBackupMode $State
     $folder = Assert-NetCrateLocalPath $State.Folder
     if ($Root.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
         $folder.StartsWith($Root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or $folder.Equals($Root, [StringComparison]::OrdinalIgnoreCase)) {
@@ -153,8 +154,11 @@ function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot) {
     $role = if ($State.Role -ceq 'EditingComputer') { 'Source' } else { 'Worker' }
     $null = New-NetCrateIdentity $Root $State.InstallationId $role
     $preparedPath = [IO.Path]::Combine($Root, 'prepared.json')
-    if ([IO.File]::Exists($preparedPath) -and (Read-NetCrateJson $preparedPath).Folder -cne $State.Folder) { throw 'This installation already uses another folder. Its files were preserved.' }
-    $tools = Install-NetCrateTools $role $Root
+    if ([IO.File]::Exists($preparedPath)) {
+        $prior = Read-NetCrateJson $preparedPath
+        if (-not $prior.Folder.Equals($State.Folder,[StringComparison]::OrdinalIgnoreCase) -or (Get-NetCrateBackupMode $prior) -cne $mode) { throw 'This installation already uses another folder or backup mode. Its files were preserved.' }
+    }
+    $tools = Install-NetCrateTools $role $Root -BackupMode $mode
     Write-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json')) $tools
     if ($role -ceq 'Worker') { $null = Initialize-NetCrateRepositories $Root $State.Folder $tools.Restic }
     $app = [IO.Path]::Combine($Root, 'App')
@@ -162,7 +166,7 @@ function Initialize-NetCrateComputer([string]$Root, $State, [string]$AppRoot) {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Programs'), 'NetCrate.lnk'))
     $shortcut.TargetPath = [IO.Path]::Combine($app, 'NetCrate.exe'); $shortcut.WorkingDirectory = $app; $shortcut.Save()
-    Write-NetCrateJson $preparedPath @{ Version = 1; Role = $role; Folder = $State.Folder; InstallationId = $State.InstallationId }
+    Write-NetCrateJson $preparedPath @{ Version = 1; Role = $role; Folder = $State.Folder; BackupMode = $mode; InstallationId = $State.InstallationId }
 }
 
 function New-NetCrateRuntimeSettings($Root, $Prepared, $Request, $WorkerComputer, $Repositories, $Tools) {
@@ -173,6 +177,8 @@ function New-NetCrateRuntimeSettings($Root, $Prepared, $Request, $WorkerComputer
         $workRoot = Set-NetCratePrivateDirectory ([IO.Path]::Combine($binding.RepositoryRoot, 'Processing'))
     }
     return [pscustomobject][ordered]@{ Version = 1; Role = $owner.Role; InstallationId = $owner.InstallationId
+        BackupMode = $(if ($owner.Role -ceq 'Worker') { Get-NetCrateBackupMode $Prepared } else { Get-NetCrateBackupMode $Request })
+        SourceBackupMode = (Get-NetCrateBackupMode $Request)
         SourceComputer = $Request.SourceComputer; WorkerComputer = $WorkerComputer; ActiveRoot = $Request.ProjectRoot
         SnapshotRoot = (Get-NetCrateSnapshotRoot $Request.ProjectRoot); StateRoot = $Root; Recipe = 'half-prores-v2'; PollSeconds = 5
         Repositories = $Repositories; Tools = $Tools; WorkRoot = $workRoot }
@@ -182,6 +188,7 @@ function Test-NetCrateConnectionPayload($Payload, $Request, $Reply) {
     if ($Payload.SourceId -cne $Request.RecipientId -or $Payload.ServerId -cne $Reply.ServerId -or $Payload.RequestId -cne $Request.RequestId -or
         $Payload.ProjectRoot -cne $Request.ProjectRoot -or $Payload.SourceComputer -cne $Request.SourceComputer -or
         $Payload.CertificateSHA256 -cne (Get-NetCrateHash $Payload.Certificate) -or $Payload.CertificateSHA256 -cne $Reply.CertificateSHA256) { throw 'The reply does not match this computer and project folder.' }
+    if ($Request.Version -eq 2 -and ($Payload.BackupMode -cne $Request.BackupMode -or $Payload.ServerBackupMode -cnotin @('Folder','Media') -or ($Request.BackupMode -ceq 'Media' -and $Payload.ServerBackupMode -ceq 'Folder'))) { throw 'The reply does not match the requested backup mode.' }
     Assert-NetCratePrivateAddress $Payload.Address
     $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromPem($Payload.Certificate)
     try { if ($cert.NotAfter.ToUniversalTime() -lt [DateTime]::UtcNow.AddDays(1)) { throw 'The backup certificate expired.' } } finally { $cert.Dispose() }
@@ -206,6 +213,7 @@ function Invoke-NetCrateSetupAction {
         $expectedRole = if ($State.Role -ceq 'EditingComputer') { 'Source' } else { 'Worker' }
         if ($owner.Role -cne $expectedRole -or $prepared.Role -cne $expectedRole) { throw 'This installation uses the other computer role. Go back and select its original role.' }
         if (-not $prepared.Folder.Equals($State.Folder, [StringComparison]::OrdinalIgnoreCase)) { throw 'This installation already uses another folder. Go back and select the original folder; existing backups were preserved.' }
+        if ((Get-NetCrateBackupMode $prepared) -cne (Get-NetCrateBackupMode $State)) { throw 'This installation uses another backup mode. Select its original mode; existing backups were preserved.' }
         $tools = Read-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json'))
         foreach ($name in @('PowerShell', 'Restic')) { if (-not [IO.File]::Exists($tools.$name)) { throw 'A required tool is missing. Choose Prepare this computer to repair it.' } }
         $message = 'This computer is prepared.'
@@ -213,6 +221,8 @@ function Invoke-NetCrateSetupAction {
         $owner = Get-NetCrateOwner $Root
         if ($owner.InstallationId -cne $State.InstallationId) { throw 'The setup does not belong to this installation.' }
         $prepared = Read-NetCrateJson ([IO.Path]::Combine($Root, 'prepared.json'))
+        $expectedRole = if ($State.Role -ceq 'EditingComputer') { 'Source' } else { 'Worker' }
+        if ($owner.Role -cne $expectedRole -or $prepared.Role -cne $expectedRole -or (Get-NetCrateBackupMode $State) -cne (Get-NetCrateBackupMode $prepared) -or -not $prepared.Folder.Equals($State.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The setup choices differ from this prepared installation.' }
         $tools = Read-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json'))
         switch -Exact ($Action) {
             'Network' {
@@ -229,7 +239,7 @@ function Invoke-NetCrateSetupAction {
             'SaveRecovery' { Export-NetCrateRecovery $Root $State.Path; $message = 'Recovery details were saved. Keep a copy on another computer or removable drive.' }
             'ExportConnection' {
                 if ($owner.Role -ceq 'Source') {
-                    $wire = New-NetCratePairingRequest $Root $env:COMPUTERNAME $prepared.Folder (Resolve-NetCrateNetworkAddress $State)
+                    $wire = New-NetCratePairingRequest $Root $env:COMPUTERNAME $prepared.Folder (Resolve-NetCrateNetworkAddress $State) -BackupMode (Get-NetCrateBackupMode $prepared)
                     $code = $wire.DeviceCode; $stage = 'RequestSaved'; $message = 'Open this file on the Backup Server. Compare the device code shown there with this code.'
                 } else {
                     $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
@@ -256,7 +266,7 @@ function Invoke-NetCrateSetupAction {
             'ImportConnection' {
                 $wire = Read-NetCrateJson $State.Path -MaximumBytes 131072
                 if ($owner.Role -ceq 'Source') { $result = Import-NetCratePairingReply $Root $wire; $code = $result.ConnectionCode; $stage = 'ReplyImported' }
-                else { $result = Import-NetCratePairingRequest $Root $wire; $code = $result.DeviceCode; $stage = 'RequestImported' }
+                else { $result = Import-NetCratePairingRequest $Root $wire -BackupMode (Get-NetCrateBackupMode $prepared); $code = $result.DeviceCode; $stage = 'RequestImported' }
                 $message = 'Compare this code with the code on your other computer. Choose Codes match only if they are identical.'
             }
             'ConfirmConnection' {
@@ -317,7 +327,7 @@ function Invoke-NetCrateSetupAction {
                 $watch = [Diagnostics.Stopwatch]::StartNew()
                 while ($watch.Elapsed.TotalMinutes -lt 20) {
                     $status = Read-NetCrateJson $queue
-                    if ($status.State -ceq 'Ready') { $message = 'The sample backup and returned proxy passed verification.'; break }
+                    if ($status.State -ceq 'Ready') { $message = if ($settings.BackupMode -ceq 'Folder') { 'The sample backup passed restored-file verification.' } else { 'The sample backup and returned proxy passed verification.' }; break }
                     if ($status.State -ceq 'NeedsAttention') { throw 'The sample could not finish. Check that both computers are on and connected to NetBird, then try again.' }
                     Start-Sleep -Seconds 2
                 }

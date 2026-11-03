@@ -14,9 +14,9 @@ I built it because it makes my own workflow easier. I’m sharing it because it 
 
 ## Development status
 
-This branch includes a Windows setup wizard for an Editing Computer and a Backup Server. It installs verified tools, creates encrypted backup storage, saves recovery details, connects the computers and runs a sample through the backup and proxy workflow.
+This branch includes a Windows setup wizard for an Editing Computer and a Backup Server. New setup defaults to ordinary folder backups, with optional media processing for video projects. It installs verified tools, creates encrypted backup storage, saves recovery details, connects the computers and verifies a generated sample.
 
-Setup uses Windows dialogs and buttons. After setup, choose **Back up a project** in NetCrate. The server creates ProRes Proxy files and contact sheets, and the Editing Computer verifies the returned files before showing them as ready. Earlier proxy versions remain available.
+Setup uses Windows dialogs and buttons. For ordinary files, choose **Back up a folder** and select the configured source folder or a folder inside it. The dashboard shows **Backed up** after the originals succeed. In media mode, choose **Back up a project**. The server also creates ProRes Proxy files and contact sheets, and the Editing Computer verifies the returned files before showing them as ready. Earlier proxy versions remain available. Existing installations keep their media workflow.
 
 The guided workflow has been tested with disposable repositories and generated footage. Testing on two separate Windows computers, including sign-in after a restart and recovery under a fresh account, is still required before a public release. Both computers must stay on and signed in while tasks run.
 

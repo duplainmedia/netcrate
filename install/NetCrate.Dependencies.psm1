@@ -98,21 +98,25 @@ function Expand-NetCrateDependency {
 }
 
 function Install-NetCrateTools {
-    param([Parameter(Mandatory)][ValidateSet('Source', 'Worker')][string]$Role, [Parameter(Mandatory)][string]$Root)
+    param([Parameter(Mandatory)][ValidateSet('Source', 'Worker')][string]$Role, [Parameter(Mandatory)][string]$Root,
+        [ValidateSet('Folder','Media')][string]$BackupMode = 'Media')
     $catalog = Get-NetCrateDependencyCatalog
     $tools = [ordered]@{}
     foreach ($package in $catalog.Packages) {
         if ($Role -cnotin $package.Roles) { continue }
+        if ($BackupMode -ceq 'Folder' -and $package.Name -cin @('FFmpeg','Pillow')) { continue }
         $archive = Get-NetCratePackageArchive $package ([IO.Path]::Combine($Root, 'Downloads'))
         $directory = Expand-NetCrateDependency $archive $package ([IO.Path]::Combine($Root, 'Tools'))
         $tools[$package.Name] = [IO.Path]::Combine($directory, $package.Executable.Replace('/', '\'))
         if ($package.Name -in @('Pillow', 'Bcrypt')) { $tools[$package.Name] = $directory }
     }
     if ($Role -eq 'Worker') {
-        $tools.FFprobe = [IO.Path]::Combine([IO.Path]::GetDirectoryName($tools.FFmpeg), 'ffprobe.exe')
+        if ($BackupMode -ceq 'Media') { $tools.FFprobe = [IO.Path]::Combine([IO.Path]::GetDirectoryName($tools.FFmpeg), 'ffprobe.exe') }
         $site = [IO.Path]::Combine([IO.Path]::GetDirectoryName($tools.Python), 'Lib', 'site-packages')
         $null = [IO.Directory]::CreateDirectory($site)
-        [IO.File]::WriteAllLines([IO.Path]::Combine($site, 'netcrate.pth'), [string[]]@($tools.Pillow, $tools.Bcrypt), [Text.UTF8Encoding]::new($false))
+        $libraries = @($tools.Bcrypt)
+        if ($BackupMode -ceq 'Media') { $libraries = @($tools.Pillow) + $libraries }
+        [IO.File]::WriteAllLines([IO.Path]::Combine($site, 'netcrate.pth'), [string[]]$libraries, [Text.UTF8Encoding]::new($false))
     }
     return [pscustomobject]$tools
 }

@@ -24,10 +24,10 @@ try {
                     foreach ($arg in (Get-NetCrateServerArguments $Root)) { $start.ArgumentList.Add($arg) }
                     $server = [Diagnostics.Process]::Start($start)
                 }
-                Invoke-NetCrateWorker $Root $settings
+                if ($settings.BackupMode -ceq 'Media' -and -not ($settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $settings.SourceBackupMode -ceq 'Folder')) { Invoke-NetCrateWorker $Root $settings }
             } else {
                 Invoke-NetCrateQueue $Root $settings
-                Invoke-NetCrateReceiver $Root $settings
+                if ($settings.BackupMode -ceq 'Media') { Invoke-NetCrateReceiver $Root $settings }
                 Update-NetCrateQueue $Root $settings
             }
             Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'Running'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o') }

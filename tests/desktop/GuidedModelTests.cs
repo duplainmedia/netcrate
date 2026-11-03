@@ -44,6 +44,16 @@ class GuidedModelTests {
    Put(Path.Combine(state,"runtime-status.json"),new{State="Running",ProcessId=self.Id,ProcessStartedUtc=self.StartTime.ToUniversalTime().ToString("o"),UpdatedUtc=DateTime.UtcNow.AddHours(-1).ToString("o")});
   if(new JobReader(settings).Read().ServiceAttention){Console.WriteLine("FAIL: live long job reported connection failure");failures++;}
   Assert(failures==0,"Guided monitor repair regressions failed.");
+  string ordinary=Path.Combine(projects,"Documents","November");
+  Put(Path.Combine(state,"Queue","ordinary.json"),new{Project=ordinary,BackupMode="Folder",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="Off",State="Ready",Sample=false,SnapshotId=new string('e',64),RequestId="",Id="ordinary",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
+  Job folder=new JobReader(settings).Read().Jobs.SingleOrDefault(j=>j.ProjectPath==ordinary);
+  Assert(folder!=null&&folder.BackupCompleted&&!folder.Active&&folder.Phase=="Backed up","An ordinary nested backup required media receipts to appear completed.");
+  Put(Path.Combine(state,"Queue","root.json"),new{Project=projects,BackupMode="Folder",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="Off",State="Ready",Sample=false,SnapshotId=new string('f',64),RequestId="",Id="root",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
+  Assert(new JobReader(settings).Read().Jobs.Any(j=>j.ProjectPath==projects&&j.Phase=="Backed up"),"The configured root backup was hidden.");
+  string mediaFailure=Path.Combine(projects,"Media publication offline");
+  Put(Path.Combine(state,"Queue","media-failure.json"),new{Project=mediaFailure,BackupMode="Media",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="NeedsAttention",State="NeedsAttention",Sample=false,SnapshotId=new string('9',64),RequestId="",Id="media-failure",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
+  Job mediaJob=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==mediaFailure);
+  Assert(mediaJob.BackupCompleted&&mediaJob.BackupCompletedUtc==new DateTime(2026,11,2,20,0,0,DateTimeKind.Utc)&&mediaJob.MediaState=="NeedsAttention","Offline media publication hid a successful original backup.");
   Console.WriteLine("PASS: 7 guided backup monitor assertions.");
  }
  static string Hash(string path){using(SHA256 hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path))).Replace("-","").ToLowerInvariant();}

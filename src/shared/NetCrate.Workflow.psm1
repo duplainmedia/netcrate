@@ -89,6 +89,8 @@ function Assert-WorkflowTree([string]$Path) {
     while ($pending.Count) {
         $current = $pending.Pop()
         foreach ($item in [IO.DirectoryInfo]::new($current).EnumerateFileSystemInfos()) {
+            # Inspect before descending: do not hydrate cloud placeholders or follow links.
+            if (([long]$item.Attributes -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { throw 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
             $null = Assert-NetCrateLocalPath $item.FullName
             if (-not $seen.Add($item.FullName)) { throw 'The folder contains colliding file names.' }
             if ($item -is [IO.DirectoryInfo]) { $pending.Push($item.FullName) }
@@ -96,23 +98,67 @@ function Assert-WorkflowTree([string]$Path) {
     }
 }
 
+function Assert-WorkflowBackupReceipt($Receipt, $Expected) {
+    if (@($Receipt.PSObject.Properties).Count -ne 9) { throw 'The backup completion receipt has unsupported fields.' }
+    foreach ($name in @('Version','Kind','RepositoryId','SourceComputer','Project','SnapshotId','BackupMode','JobId')) {
+        if ([string]$Receipt.$name -cne [string]$Expected.$name) { throw 'The backup completion receipt differs from its original snapshot checkpoint.' }
+    }
+    if (([DateTimeOffset]$Receipt.BackupCompletedUtc).UtcTicks -ne ([DateTimeOffset]$Expected.BackupCompletedUtc).UtcTicks) { throw 'The backup completion receipt has a different completion time.' }
+}
+
+function Write-NetCrateBackupReceipt($Root, $Settings, $Completion) {
+    $path = [IO.Path]::Combine($Root, 'BackupReceipts', $Completion.SnapshotId + '.json')
+    $expected = [pscustomobject][ordered]@{ Version = 1; Kind = 'backup-receipt'; RepositoryId = $Settings.Repositories.Primary.Id
+        SourceComputer = $Settings.SourceComputer; Project = $Completion.Project; SnapshotId = $Completion.SnapshotId
+        BackupMode = $Completion.BackupMode; JobId = $Completion.Id; BackupCompletedUtc = $Completion.BackupCompletedUtc }
+    if ([IO.File]::Exists($path)) { Assert-WorkflowBackupReceipt (Read-NetCrateJson $path) $expected }
+    else { Write-NetCrateJson $path $expected }
+    $tag = 'netcrate-receipt-' + $Completion.SnapshotId
+    $existing = @(Invoke-WorkflowRestic $Root $Settings Primary @('snapshots', '--json', '--host', $Settings.SourceComputer, '--tag', $tag) | ConvertFrom-Json)
+    if ($existing.Count -gt 1000) { throw 'The backup completion receipt list is larger than expected.' }
+    foreach ($snapshot in $existing) {
+        if ($snapshot.id -cnotmatch '^[a-f0-9]{64}$' -or $snapshot.hostname -cne $Settings.SourceComputer -or @($snapshot.paths).Count -ne 1 -or $snapshot.tags -cnotcontains 'netcrate-backup-receipt') { throw 'The stored completion receipt has an invalid snapshot binding.' }
+        $wire = Invoke-WorkflowRestic $Root $Settings Primary @('dump', $snapshot.id, (Convert-WorkflowSnapshotPath $snapshot.paths[0]))
+        if ([Text.Encoding]::UTF8.GetByteCount($wire) -gt 16384) { throw 'The backup completion receipt is too large.' }
+        Assert-WorkflowBackupReceipt ($wire | ConvertFrom-Json) $expected
+    }
+    if (-not $existing.Count) { $null = Backup-WorkflowPath $Root $Settings Primary $path backup-receipt @('--tag', $tag) }
+}
+
+function Invoke-NetCrateOriginals {
+    param([string]$Root, $Settings, [string]$Project, [string]$Checkpoint, [ValidateSet('Folder','Media')][string]$BackupMode)
+    $path = Get-NetCrateBackupPath $Settings $Project $BackupMode
+    $status = if ($Checkpoint) { Read-NetCrateJson $Checkpoint } else { [pscustomobject]@{ Id = [guid]::NewGuid().ToString('N'); SnapshotId = ''; BackupCompletedUtc = '' } }
+    if ($status.PSObject.Properties.Name -notcontains 'BackupCompletedUtc') { $status | Add-Member BackupCompletedUtc '' }
+    if ($status.PSObject.Properties.Name -notcontains 'BackupMode') { $status | Add-Member BackupMode $BackupMode }
+    if ($status.PSObject.Properties.Name -notcontains 'Project') { $status | Add-Member Project $path }
+    if ($status.PSObject.Properties.Name -notcontains 'MediaState') { $status | Add-Member MediaState $(if ($BackupMode -ceq 'Folder') { 'Off' } else { 'Pending' }) }
+    if ($status.SnapshotId -cnotmatch '^[a-f0-9]{64}$') {
+        Assert-WorkflowTree $path
+        $tag = if ($BackupMode -ceq 'Folder') { 'folder-originals' } else { 'originals' }
+        $extra = @('--tag', 'netcrate-v2-originals')
+        if ($BackupMode -ceq 'Media') { $extra += @('--exclude', ($path + '\Proxies\NetCrate'), '--exclude', ($path + '\.office-generated-media')) }
+        # Backup-WorkflowPath only returns after exit zero and exactly one full ID.
+        $status.SnapshotId = Backup-WorkflowPath $Root $Settings Primary $path $tag $extra
+        $status.BackupCompletedUtc = [DateTime]::UtcNow.ToString('o')
+        if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
+    }
+    if (-not $status.BackupCompletedUtc) { $status.BackupCompletedUtc = [DateTime]::UtcNow.ToString('o'); if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status } }
+    Write-NetCrateBackupReceipt $Root $Settings $status
+    return $status
+}
+
 function Invoke-NetCrateBackup {
     param([string]$Root, $Settings, [string]$Project, [string]$Checkpoint)
-    $path = Assert-NetCrateLocalPath $Project
+    $path = Get-NetCrateBackupPath $Settings $Project Media
     $snapshotPath = Get-NetCrateSnapshotRoot $path
-    $expected = Get-NetCrateProjectPath $Settings $snapshotPath
-    if (-not $path.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Choose a project directly inside your project folder.' }
-    Assert-WorkflowTree $path
-    $status = if ($Checkpoint) { Read-NetCrateJson $Checkpoint } else { $null }
-    $id = if ($status -and $status.SnapshotId -cmatch '^[a-f0-9]{64}$') { $status.SnapshotId } else {
-        Backup-WorkflowPath $Root $Settings Primary $path originals @('--exclude', ($path + '\Proxies\NetCrate'), '--exclude', ($path + '\.office-generated-media'))
-    }
-    if ($status) { $status.SnapshotId = $id; Write-NetCrateJson $Checkpoint $status }
+    $status = Invoke-NetCrateOriginals $Root $Settings $path $Checkpoint Media
+    $id = $status.SnapshotId
     $recipe = Get-NetCrateRecipe $Settings.Recipe
     $identity = Get-NetCrateFootageIdentity $snapshotPath (Get-WorkflowNodes $Root $Settings $id $snapshotPath) $recipe.FingerprintRecipe
     $request = [pscustomobject][ordered]@{ Version = 2; Kind = 'request'; SourceComputer = $Settings.SourceComputer
         Repository = $Settings.Repositories.Primary.Uri; BackupExitCode = 0; SnapshotId = $id; ProjectPath = $snapshotPath
-        CompletedUtc = [DateTime]::UtcNow.ToString('o'); Recipe = $recipe.FingerprintRecipe; FootageFingerprint = $identity.Fingerprint }
+        CompletedUtc = $status.BackupCompletedUtc; Recipe = $recipe.FingerprintRecipe; FootageFingerprint = $identity.Fingerprint }
     $requestId = Get-NetCrateRequestId $id $snapshotPath $recipe.FingerprintRecipe
     $null = Test-NetCrateRequest $request $requestId $Settings
     Write-NetCrateJson ([IO.Path]::Combine($Root, 'Requests', $requestId + '.json')) $request
@@ -153,6 +199,8 @@ function Test-WorkflowResult([string]$Path, $Association, [switch]$AvailabilityO
 
 function Invoke-NetCrateWorker {
     param([string]$Root, $Settings)
+    if ((Get-NetCrateBackupMode $Settings) -ceq 'Folder') { return }
+    if ($Settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $Settings.SourceBackupMode -ceq 'Folder') { return }
     $workspace = if ($Settings.PSObject.Properties.Name -contains 'WorkRoot') { Assert-NetCrateLocalPath $Settings.WorkRoot } else { $Root }
     $requests = @(Read-WorkflowRecords $Root $Settings request $Settings.SourceComputer)
     foreach ($request in $requests) {
@@ -253,6 +301,7 @@ function Get-NetCrateReceipt {
 
 function Invoke-NetCrateReceiver {
     param([string]$Root, $Settings)
+    if ((Get-NetCrateBackupMode $Settings) -ceq 'Folder') { return }
     foreach ($progress in @(Read-WorkflowRecords $Root $Settings progress $Settings.WorkerComputer)) {
         if ($progress.Version -ne 2 -or $progress.Kind -cne 'progress' -or $progress.RequestId -cnotmatch '^[a-f0-9]{64}$' -or $progress.State -cnotin @('Processing', 'NeedsAttention')) { continue }
         $requestPath = [IO.Path]::Combine($Root, 'Requests', $progress.RequestId + '.json')
@@ -330,4 +379,4 @@ function Convert-WorkflowSnapshotPath([string]$Path) {
 . (Join-Path $PSScriptRoot 'NetCrate.RemoteResult.ps1')
 Export-ModuleMember -Function Invoke-NetCrateBackup, Invoke-NetCrateWorker, Invoke-NetCrateReceiver, Get-NetCrateReceipt,
     New-NetCrateSample, Invoke-WorkflowRestic, Write-WorkflowRecord, Read-WorkflowRecords, Test-WorkflowResult, Assert-WorkflowTree,
-    Add-NetCrateBackupQueue, Invoke-NetCrateQueue, Update-NetCrateQueue
+    Add-NetCrateBackupQueue, Invoke-NetCrateQueue, Update-NetCrateQueue, Invoke-NetCrateOriginals

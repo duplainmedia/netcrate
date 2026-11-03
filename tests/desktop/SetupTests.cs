@@ -34,6 +34,10 @@ class SetupTests
         MemorySetupStore store = new MemorySetupStore();
         SetupController setup = new SetupController(service, store);
         Assert(setup.State.Step == SetupStep.Computer, "A new setup skipped the computer choice.");
+        Assert(setup.State.BackupMode=="Folder","New setup did not default to ordinary backups.");
+        setup.ChooseBackupMode("Media");
+        Assert(setup.State.BackupMode=="Media"&&store.Load().BackupMode=="Media","The media choice was not persisted.");
+        setup.ChooseBackupMode("Folder");
         Reject(() => setup.Continue(), "No computer role was accepted.");
         setup.ChooseComputer(ComputerRole.EditingComputer);
         setup.Continue();
@@ -52,6 +56,7 @@ class SetupTests
         service.PrepareResult = SetupResult.Done("Required software is available.");
         await setup.PrepareAsync(CancellationToken.None);
         Assert(setup.State.Prepared && setup.CanContinue, "Successful preparation did not unlock connection.");
+        Reject(()=>setup.ChooseBackupMode("Media"),"Mode changed after preparation without returning to folder choices.");
         setup.Continue();
         service.ConnectionResult = SetupResult.ActionRequired("sign-in-needed", "Finish signing in to your private network.");
         setup.UseNetworkAddress("10.44.0.2");

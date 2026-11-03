@@ -25,6 +25,12 @@ Check 'inspection rejects changed role' {
     Assert $rejected 'Inspection silently accepted a different role.'
 }
 $app = Join-Path $root 'App'; $null = New-Item -ItemType Directory -Path "$app/src/shared", "$app/install" -Force
+Check 'inspection rejects a mode change from a legacy prepared installation' {
+    $state.Role='EditingComputer'; $state | Add-Member BackupMode Folder -Force
+    $rejected=$false;try{$r=Invoke-NetCrateSetupAction Inspect $state $root $repo;$rejected=-not $r.Succeeded}catch{$rejected=$true}
+    Assert $rejected 'Repair silently converted a legacy Media installation into Folder.'
+    $state.BackupMode='Media'
+}
 Check 'owned task launches under a restricted parent policy' {
     $marker = Join-Path $TestRoot 'task-ran.txt'
     [IO.File]::WriteAllText("$app/src/shared/Invoke-NetCrateRuntime.ps1", ('param([string]$Root) [IO.File]::WriteAllText(''' + $marker + ''',''ran'')'))
@@ -64,5 +70,14 @@ Check 'sample resumes after interrupted creation' {
     } finally { & $module { param($Body) Set-Item Function:script:New-NetCrateSample -Value $Body } $definition }
     $path = Add-NetCrateBackupQueue $root $settings -Sample
     Assert ([IO.File]::Exists($path)) 'The sample did not resume from its owned partial folder.'
+}
+Check 'accepted media failure updates only media state' {
+    $id='9'*64;$snapshot='8'*64;$completed='2026-11-02T20:00:00Z'
+    $path="$root/Queue/media-progress.json"
+    Write-NetCrateJson $path @{Version=1;Id='media-progress';Project=(Join-Path $TestRoot 'Projects/A');BackupMode='Media';SnapshotId=$snapshot;BackupCompletedUtc=$completed;MediaState='Pending';State='WaitingForProxies';RequestId=$id;UpdatedUtc=$completed}
+    Write-NetCrateJson "$root/JobProgress/$id.json" @{SnapshotId=$snapshot;State='NeedsAttention'}
+    Update-NetCrateQueue $root ([pscustomobject]@{})
+    $status=Read-NetCrateJson $path
+    Assert ($status.MediaState -ceq 'NeedsAttention' -and $status.SnapshotId -ceq $snapshot -and ([DateTimeOffset]$status.BackupCompletedUtc).UtcDateTime -eq ([DateTimeOffset]$completed).UtcDateTime) 'Media failure did not retain the successful original and update media state.'
 }
 if ($failures.Count) { $failures | Write-Output; exit 1 }

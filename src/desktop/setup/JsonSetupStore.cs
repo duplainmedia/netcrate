@@ -24,8 +24,10 @@ namespace NetCrate.Setup
                 if (fields == null || !fields.ContainsKey("Version") || !fields.ContainsKey("InstallationId") ||
                     !fields.ContainsKey("Role") || !fields.ContainsKey("Step")) throw new InvalidDataException();
                 SetupState state = json.Deserialize<SetupState>(text);
+                if (!fields.ContainsKey("BackupMode")) state.BackupMode = "Media";
                 if (state == null || state.Version != 1 || !Regex.IsMatch(state.InstallationId ?? "", "^[a-f0-9]{32}$") ||
-                    !Enum.IsDefined(typeof(ComputerRole), state.Role) || !Enum.IsDefined(typeof(SetupStep), state.Step))
+                    !Enum.IsDefined(typeof(ComputerRole), state.Role) || !Enum.IsDefined(typeof(SetupStep), state.Step) ||
+                    (state.BackupMode != "Folder" && state.BackupMode != "Media"))
                     throw new InvalidDataException();
                 return state;
             }

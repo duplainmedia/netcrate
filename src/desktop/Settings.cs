@@ -21,6 +21,7 @@ namespace NetCrate
         public string WorkerComputer { get; set; }
         public string StateRoot { get; set; }
         public string Role { get; set; }
+        public string BackupMode { get; set; }
         public string InstallationId { get; set; }
 
         public static string DefaultPath
@@ -50,6 +51,8 @@ namespace NetCrate
                 settings.SourceComputer = source;
                 settings.WorkerComputer = worker;
                 settings.Role = role;
+                settings.BackupMode = data.ContainsKey("BackupMode") ? Required(data, "BackupMode") : "Media";
+                if (settings.BackupMode != "Folder" && settings.BackupMode != "Media") throw new InvalidDataException("The backup mode is invalid.");
                 object value;
                 if (data.TryGetValue("InstallationId", out value) && value is string) settings.InstallationId = (string)value;
                 if (role == "Worker" && data.TryGetValue("WorkRoot", out value) && value is string) settings.OutputRoot = NormalizeRoot((string)value);
@@ -92,6 +95,7 @@ namespace NetCrate
             return new Settings
             {
                 StateRoot = state,
+                BackupMode = "Media",
                 ActiveRoot = active,
                 OutputRoot = active,
                 SnapshotRoot = "/" + Char.ToUpperInvariant(active[0]) + active.Substring(2).Replace('\\', '/'),

@@ -17,6 +17,7 @@ $settings = [ordered]@{
 function Save-Fixture { $settings | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8 }
 Save-Fixture
 $loaded = Import-NetCrateSettings -LiteralPath $path -Role Source
+Assert ($loaded.BackupMode -ceq 'Media') 'Legacy settings must keep media behavior.'
 Assert ($loaded.ActiveRoot -ceq 'F:\Video Projects 日本語') 'Project root changed.'
 Assert ($loaded.SnapshotRoot -ceq '/F/Video Projects 日本語') 'Snapshot root used another drive.'
 Assert ((Get-NetCrateProjectPath -Settings $loaded -SnapshotPath '/F/Video Projects 日本語/Project & One') -ceq 'F:\Video Projects 日本語\Project & One') 'Project mapping changed.'
@@ -31,4 +32,19 @@ $settings.Repositories.Primary.Uri = 'rest:https://user:secret@backup.example:82
 Reject { Import-NetCrateSettings -LiteralPath $path -Role Source }
 $settings.Repositories.Primary.Uri = 'rest:https://backup.example:8200/editing/originals/'; $settings.Remove('Tools'); Save-Fixture
 Reject { Import-NetCrateSettings -LiteralPath $path -Role Source }
+Assert ((Get-NetCrateBackupPath $loaded 'f:\VIDEO PROJECTS 日本語' Folder) -ieq $loaded.ActiveRoot) 'Folder mode rejected its root.'
+Assert ((Get-NetCrateBackupPath $loaded 'F:\Video Projects 日本語\Notes\November' Folder) -ceq 'F:\Video Projects 日本語\Notes\November') 'Folder mode rejected nested input.'
+Reject { Get-NetCrateBackupPath $loaded 'F:\Video Projects 日本語 sibling\Notes' Folder }
+Reject { Get-NetCrateBackupPath $loaded 'F:\Video Projects 日本語\Notes\November' Media }
+$overlap = $loaded.PSObject.Copy(); $overlap.StateRoot = 'F:\Video Projects 日本語\Notes\State'
+Reject { Get-NetCrateBackupPath $overlap 'F:\Video Projects 日本語\Notes' Folder }
+$worker=$loaded.PSObject.Copy();$worker.Role='Worker';$worker.BackupMode='Folder'
+$worker.Repositories=@{Primary=@{Uri=(Join-Path $TestRoot 'Primary');Id=('a'*64)};Results=@{Uri=(Join-Path $TestRoot 'Results');Id=('b'*64)}}
+$worker.Tools=@{PowerShell='C:\Tools\pwsh.exe';Restic='C:\Tools\restic.exe';RestServer='C:\Tools\rest-server.exe';Python='C:\Tools\python.exe'}
+Write-NetCrateJson $path $worker
+Assert ((Import-NetCrateSettings $path Worker).BackupMode -ceq 'Folder') 'A Folder worker still requires video tools.'
+$worker.BackupMode='Media';Write-NetCrateJson $path $worker
+Reject { Import-NetCrateSettings $path Worker }
+$worker.BackupMode='Unknown';Write-NetCrateJson $path $worker
+Reject { Import-NetCrateSettings $path Worker }
 Write-Output "PASS: $script:assertions shared configuration assertions."

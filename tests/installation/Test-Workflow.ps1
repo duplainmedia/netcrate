@@ -90,16 +90,21 @@ if ($reused.GenerationSnapshotId -ne $request.SnapshotId -or $reused.RequestedSn
 if (-not (Test-Path -LiteralPath $receipt.LocalPath)) { throw 'A previous proxy version was removed.' }
 $editing.Recipe = 'quarter-prores-v1'
 $queueFile = Add-NetCrateBackupQueue $source $editing (Join-Path $projects 'First project')
+$legacyQueue=Read-NetCrateJson $queueFile
+$legacyQueue.PSObject.Properties.Remove('BackupMode');$legacyQueue.PSObject.Properties.Remove('BackupCompletedUtc');$legacyQueue.PSObject.Properties.Remove('MediaState')
+Write-NetCrateJson $queueFile $legacyQueue
 $resultUri = $editing.Repositories.Results.Uri
 $editing.Repositories.Results.Uri = Join-Path $TestRoot 'offline-results'
 Invoke-NetCrateQueue $source $editing
 $interrupted = Read-NetCrateJson $queueFile
 if ($interrupted.State -ne 'NeedsAttention' -or $interrupted.SnapshotId -cnotmatch '^[a-f0-9]{64}$') { throw 'A failed request delivery lost its successful backup checkpoint.' }
+if (-not $interrupted.BackupCompletedUtc -or $interrupted.BackupMode -cne 'Media' -or $interrupted.MediaState -cne 'NeedsAttention') { throw 'A media publication failure discarded the original completion time or failed to report media separately.' }
 $editing.Repositories.Results.Uri = $resultUri
 $interrupted.RetryAfterUtc = [DateTime]::UtcNow.AddSeconds(-1).ToString('o'); Write-NetCrateJson $queueFile $interrupted
 Invoke-NetCrateQueue $source $editing
 $queued = Read-NetCrateJson $queueFile
 if ($queued.State -ne 'WaitingForProxies' -or $queued.SnapshotId -cne $interrupted.SnapshotId) { throw 'Retry made another backup instead of resuming its saved snapshot.' }
+if ($queued.BackupCompletedUtc -cne $interrupted.BackupCompletedUtc -or $queued.MediaState -cne 'Pending') { throw 'Retry changed the original completion time or failed to resume media.' }
 Invoke-NetCrateWorker $worker $server
 Invoke-NetCrateReceiver $source $editing
 Update-NetCrateQueue $source $editing

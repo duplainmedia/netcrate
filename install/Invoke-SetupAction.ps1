@@ -7,6 +7,13 @@ try {
     Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Configuration.psm1')
     $state = Read-NetCrateJson $InputFile -MaximumBytes 32768
     if ($state.Version -ne 1 -or $state.Role -cnotin @('EditingComputer', 'BackupServer') -or $state.InstallationId -cnotmatch '^[a-f0-9]{32}$') { throw 'Invalid setup input.' }
+    $mode = Get-NetCrateBackupMode $state
+    foreach ($field in @('Folder','Path')) {
+        if ($state.PSObject.Properties.Name -contains $field -and $state.$field) {
+            if ($state.$field -isnot [string] -or $state.$field.Length -gt 240) { throw 'The selected path is too long or invalid.' }
+            $null = Assert-NetCrateLocalPath $state.$field
+        }
+    }
     $root = [IO.Path]::Combine([IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($InputFile)), 'Engine')
     $null = Assert-NetCrateLocalPath $root
     if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -30,9 +37,14 @@ try {
     Import-Module (Join-Path $PSScriptRoot 'NetCrate.Engine.psm1') -DisableNameChecking
     if ($Action -ceq 'QueueBackup') {
         Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Workflow.psm1')
+        Import-Module (Join-Path $PSScriptRoot '../src/shared/NetCrate.Credentials.psm1')
+        $owner = Get-NetCrateOwner $root
+        $prepared = Read-NetCrateJson ([IO.Path]::Combine($root, 'prepared.json'))
+        if ($state.Role -cne 'EditingComputer' -or $owner.Role -cne 'Source' -or $owner.InstallationId -cne $state.InstallationId -or $prepared.Role -cne 'Source' -or $prepared.InstallationId -cne $owner.InstallationId -or (Get-NetCrateBackupMode $prepared) -cne $mode -or -not $prepared.Folder.Equals($state.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The backup action does not match this source installation.' }
         $settings = Import-NetCrateSettings ([IO.Path]::Combine($root, 'settings.json')) Source
+        if ($settings.InstallationId -cne $owner.InstallationId -or (Get-NetCrateBackupMode $settings) -cne $mode -or -not $settings.StateRoot.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or -not $settings.ActiveRoot.Equals($prepared.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The backup settings do not match this installation.' }
         $null = Add-NetCrateBackupQueue $root $settings $state.Path
-        $result = @{ Succeeded = $true; Code = 'ok'; Message = 'The project was added to the backup queue.' }
+        $result = @{ Succeeded = $true; Code = 'ok'; Message = 'The folder was added to the backup queue.' }
     } else { $result = Invoke-NetCrateSetupAction $Action $state $root (Split-Path -Parent $PSScriptRoot) }
     $result | ConvertTo-Json -Depth 8 -Compress
 } catch {

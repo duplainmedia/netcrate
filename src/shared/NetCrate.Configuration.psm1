@@ -88,9 +88,42 @@ function Get-NetCrateProjectPath {
     return [IO.Path]::Combine($Settings.ActiveRoot, $name)
 }
 
+function Get-NetCrateBackupMode($Record) {
+    $mode = if ($Record.PSObject.Properties.Name -contains 'BackupMode') { $Record.BackupMode } elseif ($Record -is [Collections.IDictionary] -and $Record.Contains('BackupMode')) { $Record.BackupMode } else { 'Media' }
+    if ($mode -cnotin @('Folder', 'Media')) { throw 'The backup mode is invalid.' }
+    return $mode
+}
+
+function Get-NetCrateBackupPath {
+    param($Settings, [string]$Path, [ValidateSet('Folder', 'Media')][string]$BackupMode)
+    $full = Assert-NetCrateLocalPath $Path
+    $root = Assert-NetCrateLocalPath $Settings.ActiveRoot
+    if ($BackupMode -ceq 'Media') {
+        $expected = Get-NetCrateProjectPath $Settings (Get-NetCrateSnapshotRoot $full)
+        if (-not $full.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Choose a project directly inside your project folder.' }
+    } elseif (-not ($full.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase))) {
+        throw 'Choose the configured folder or a folder inside it.'
+    }
+    $protected = @([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')))
+    if ($Settings.PSObject.Properties.Name -contains 'StateRoot') { $protected += $Settings.StateRoot }
+    if ($Settings.PSObject.Properties.Name -contains 'WorkRoot' -and $Settings.WorkRoot) { $protected += $Settings.WorkRoot }
+    if ($Settings.PSObject.Properties.Name -contains 'Repositories') { foreach ($name in @('Primary', 'Results')) {
+        $uri = $Settings.Repositories.$name.Uri
+        if ($uri -match '^[A-Za-z]:[\\/]') { $protected += $uri }
+    } }
+    foreach ($other in $protected) {
+        $other = [IO.Path]::GetFullPath($other).TrimEnd('\')
+        if ($full.Equals($other, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($other + '\', [StringComparison]::OrdinalIgnoreCase) -or $other.StartsWith($full + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The backup folder overlaps NetCrate application or storage files.'
+        }
+    }
+    return $full
+}
+
 function Import-NetCrateSettings {
     param([Parameter(Mandatory)][string]$LiteralPath, [Parameter(Mandatory)][ValidateSet('Source', 'Worker')][string]$Role)
     $settings = Read-NetCrateJson $LiteralPath -MaximumBytes 65536
+    $settings | Add-Member -NotePropertyName BackupMode -NotePropertyValue (Get-NetCrateBackupMode $settings) -Force
     if (($settings.Version -isnot [int] -and $settings.Version -isnot [long]) -or $settings.Version -ne 1 -or $settings.Role -cne $Role -or
         $settings.InstallationId -cnotmatch '^[a-f0-9]{32}$') { throw 'The NetCrate configuration does not match this computer role.' }
     foreach ($name in @('SourceComputer', 'WorkerComputer')) {
@@ -118,11 +151,11 @@ function Import-NetCrateSettings {
         throw 'Originals and generated media require separate repositories.'
     }
     $requiredTools = @('PowerShell', 'Restic')
-    if ($Role -eq 'Worker') { $requiredTools += @('RestServer', 'Python', 'FFmpeg', 'FFprobe') }
+    if ($Role -eq 'Worker') { $requiredTools += @('RestServer', 'Python'); if ($settings.BackupMode -ceq 'Media') { $requiredTools += @('FFmpeg', 'FFprobe') } }
     foreach ($name in $requiredTools) {
         if ($settings.Tools.$name -notmatch '^[A-Za-z]:[\\/]' -or $settings.Tools.$name -match '["\x00-\x1f]|(^|[\\/])\.{1,2}([\\/]|$)') { throw 'A required tool path is missing or invalid.' }
     }
     return $settings
 }
 
-Export-ModuleMember -Function Assert-NetCrateLocalPath, Assert-NetCrateRelativePath, Read-NetCrateJson, Write-NetCrateJson, Get-NetCrateSnapshotRoot, Get-NetCrateProjectPath, Import-NetCrateSettings
+Export-ModuleMember -Function Assert-NetCrateLocalPath, Assert-NetCrateRelativePath, Read-NetCrateJson, Write-NetCrateJson, Get-NetCrateSnapshotRoot, Get-NetCrateProjectPath, Get-NetCrateBackupMode, Get-NetCrateBackupPath, Import-NetCrateSettings

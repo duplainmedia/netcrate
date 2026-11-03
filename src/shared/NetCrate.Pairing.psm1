@@ -51,15 +51,18 @@ function Assert-PairingSignature([string]$PublicKey, $Data, [string]$Signature) 
 }
 
 function Get-PairingRequestData($Request) {
-    return [ordered]@{ Version = $Request.Version; Kind = $Request.Kind; RequestId = $Request.RequestId; RecipientId = $Request.RecipientId
+    $data = [ordered]@{ Version = $Request.Version; Kind = $Request.Kind; RequestId = $Request.RequestId; RecipientId = $Request.RecipientId
         SourceComputer = $Request.SourceComputer; ProjectRoot = $Request.ProjectRoot; NetworkAddress = $Request.NetworkAddress
         CreatedUtc = (Get-PairingUtc $Request.CreatedUtc).ToString('o'); ExpiresUtc = (Get-PairingUtc $Request.ExpiresUtc).ToString('o')
         PublicKey = $Request.PublicKey; DeviceCode = $Request.DeviceCode }
+    if ($Request.Version -eq 2) { $data.BackupMode = $Request.BackupMode }
+    return $data
 }
 
 function New-NetCratePairingRequest {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$SourceComputer,
-        [Parameter(Mandatory)][string]$ProjectRoot, [Parameter(Mandatory)][string]$NetworkAddress, [DateTime]$Now = [DateTime]::UtcNow)
+        [Parameter(Mandatory)][string]$ProjectRoot, [Parameter(Mandatory)][string]$NetworkAddress, [DateTime]$Now = [DateTime]::UtcNow,
+        [ValidateSet('Folder','Media')][string]$BackupMode)
     $owner = Get-NetCrateOwner $Root
     if ($owner.Role -cne 'Source') { throw 'Create the first connection file on the Editing Computer.' }
     if ($SourceComputer -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$') { throw 'The Editing Computer identity is invalid.' }
@@ -73,6 +76,7 @@ function New-NetCratePairingRequest {
         SourceComputer = $SourceComputer; ProjectRoot = $ProjectRoot; NetworkAddress = $NetworkAddress
         CreatedUtc = $Now.ToUniversalTime().ToString('o'); ExpiresUtc = $Now.ToUniversalTime().AddHours(24).ToString('o')
         PublicKey = $identity.PublicKey; DeviceCode = $deviceCode }
+    if ($BackupMode) { $data.Version = 2; $data.BackupMode = $BackupMode }
     $request = [pscustomobject]$data
     $request | Add-Member -NotePropertyName Signature -NotePropertyValue (Get-PairingSignature $Root $data)
     Protect-NetCrateRecord $Root 'outbound-request' @{ Request = $request; Consumed = $false }
@@ -80,9 +84,11 @@ function New-NetCratePairingRequest {
 }
 
 function Import-NetCratePairingRequest {
-    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Request, [DateTime]$Now = [DateTime]::UtcNow)
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Request, [DateTime]$Now = [DateTime]::UtcNow,
+        [ValidateSet('Folder','Media')][string]$BackupMode = 'Media')
     $owner = Get-NetCrateOwner $Root
-    if ($owner.Role -cne 'Worker' -or @($Request.PSObject.Properties).Count -ne 12 -or $Request.Version -ne 1 -or
+    $fieldCount = if ($Request.Version -eq 2) { 13 } else { 12 }
+    if ($owner.Role -cne 'Worker' -or @($Request.PSObject.Properties).Count -ne $fieldCount -or $Request.Version -notin @(1,2) -or
         $Request.Kind -cne 'netcrate-pair-request' -or $Request.RequestId -cnotmatch '^[a-f0-9]{32}$' -or
         $Request.RecipientId -cnotmatch '^[a-f0-9]{32}$' -or $Request.RecipientId -ceq $owner.InstallationId -or
         $Request.SourceComputer -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$') { throw 'Choose a connection file from your Editing Computer.' }
@@ -91,7 +97,9 @@ function Import-NetCratePairingRequest {
     $code = Format-PairingCode (Get-NetCrateHash ('device-v1|' + (Get-PairingKeyHash $Request.PublicKey) + '|' + $Request.RequestId))
     if ($code -cne $Request.DeviceCode) { throw 'The editing device code is invalid.' }
     Assert-PairingSignature $Request.PublicKey (Get-PairingRequestData $Request) $Request.Signature
-    Protect-NetCrateRecord $Root 'inbound-request' @{ Request = $Request; Confirmed = $false }
+    $requested = Get-NetCrateBackupMode $Request
+    if ($requested -ceq 'Media' -and $BackupMode -ceq 'Folder') { throw 'This source requests media processing. Prepare the Backup Server in Media mode first.' }
+    Protect-NetCrateRecord $Root 'inbound-request' @{ Request = $Request; Confirmed = $false; ServerBackupMode = $BackupMode }
     return [pscustomobject]@{ RequestId = $Request.RequestId; DeviceCode = $code; SourceComputer = $Request.SourceComputer }
 }
 
@@ -105,10 +113,12 @@ function Confirm-NetCratePairingRequest {
 }
 
 function Get-PairingHeader($Reply) {
-    return [ordered]@{ Version = $Reply.Version; Kind = $Reply.Kind; RequestId = $Reply.RequestId; RecipientId = $Reply.RecipientId
+    $data = [ordered]@{ Version = $Reply.Version; Kind = $Reply.Kind; RequestId = $Reply.RequestId; RecipientId = $Reply.RecipientId
         ServerId = $Reply.ServerId; ServerPublicKey = $Reply.ServerPublicKey; CertificateSHA256 = $Reply.CertificateSHA256
         CreatedUtc = (Get-PairingUtc $Reply.CreatedUtc).ToString('o'); ExpiresUtc = (Get-PairingUtc $Reply.ExpiresUtc).ToString('o')
         ConnectionCode = $Reply.ConnectionCode }
+    if ($Reply.Version -eq 2) { $data.BackupMode = $Reply.BackupMode; $data.ServerBackupMode = $Reply.ServerBackupMode }
+    return $data
 }
 
 function Get-PairingSignedReply($Reply) {
@@ -134,6 +144,15 @@ function New-NetCratePairingReply {
     $header = [ordered]@{ Version = 1; Kind = 'netcrate-pair-reply'; RequestId = $pending.Request.RequestId; RecipientId = $pending.Request.RecipientId
         ServerId = $owner.InstallationId; ServerPublicKey = $identity.PublicKey; CertificateSHA256 = $Payload.CertificateSHA256
         CreatedUtc = $Now.ToUniversalTime().ToString('o'); ExpiresUtc = $Now.ToUniversalTime().AddHours(24).ToString('o'); ConnectionCode = $code }
+    if ($pending.Request.Version -eq 2) {
+        $requested = Get-NetCrateBackupMode $pending.Request
+        $capability = if ($pending.PSObject.Properties.Name -contains 'ServerBackupMode') { $pending.ServerBackupMode } else { 'Media' }
+        $header.Version = 2; $header.BackupMode = $requested; $header.ServerBackupMode = $capability
+        # Copy caller payload; mode binding is always derived from the verified request.
+        $Payload = $Payload | ConvertTo-Json -Depth 24 | ConvertFrom-Json
+        $Payload | Add-Member -NotePropertyName BackupMode -NotePropertyValue $requested -Force
+        $Payload | Add-Member -NotePropertyName ServerBackupMode -NotePropertyValue $capability -Force
+    }
     $plaintext = [Text.Encoding]::UTF8.GetBytes(($Payload | ConvertTo-Json -Depth 24 -Compress))
     if ($plaintext.Length -gt 65536) { throw 'The connection payload is too large.' }
     $key = [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
@@ -161,8 +180,9 @@ function Import-NetCratePairingReply {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Reply, [DateTime]$Now = [DateTime]::UtcNow)
     $owner = Get-NetCrateOwner $Root
     $pending = Unprotect-NetCrateRecord $Root 'outbound-request'
-    if ($owner.Role -cne 'Source' -or $pending.Consumed -eq $true -or @($Reply.PSObject.Properties).Count -ne 15 -or
-        $Reply.Version -ne 1 -or $Reply.Kind -cne 'netcrate-pair-reply' -or $Reply.RecipientId -cne $owner.InstallationId -or
+    $fieldCount = if ($pending.Request.Version -eq 2) { 17 } else { 15 }
+    if ($owner.Role -cne 'Source' -or $pending.Consumed -eq $true -or @($Reply.PSObject.Properties).Count -ne $fieldCount -or
+        $Reply.Version -ne $pending.Request.Version -or $Reply.Kind -cne 'netcrate-pair-reply' -or $Reply.RecipientId -cne $owner.InstallationId -or
         $Reply.RequestId -cne $pending.Request.RequestId -or $Reply.ServerId -cnotmatch '^[a-f0-9]{32}$' -or
         $Reply.ServerId -ceq $owner.InstallationId -or $Reply.CertificateSHA256 -cnotmatch '^[a-f0-9]{64}$') { throw 'Choose the reply made for this Editing Computer.' }
     Test-PairingExpiry $pending.Request $Now
@@ -184,6 +204,11 @@ function Import-NetCratePairingReply {
             [Text.Encoding]::UTF8.GetBytes((ConvertTo-NetCrateCanonicalJson (Get-PairingHeader $Reply))))
         $payload = [Text.Encoding]::UTF8.GetString($plaintext) | ConvertFrom-Json
         if ($payload.CertificateSHA256 -cne $Reply.CertificateSHA256) { throw 'The encrypted certificate binding differs from the connection file.' }
+        if ($Reply.Version -eq 2) {
+            $requested = Get-NetCrateBackupMode $pending.Request
+            $capability = Get-NetCrateBackupMode ([pscustomobject]@{ BackupMode = $Reply.ServerBackupMode })
+            if ($payload.BackupMode -cne $requested -or $Reply.BackupMode -cne $requested -or $payload.ServerBackupMode -cne $capability -or ($requested -ceq 'Media' -and $capability -ceq 'Folder')) { throw 'The encrypted backup mode differs from the requested capability.' }
+        }
         Protect-NetCrateRecord $Root 'pending-reply' @{ Payload = $payload; Reply = $Reply; Confirmed = $false }
         return [pscustomobject]@{ ConnectionCode = $code; ServerId = $Reply.ServerId; WorkerComputer = $payload.WorkerComputer }
     } finally {

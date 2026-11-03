@@ -105,6 +105,19 @@ namespace NetCrate.Setup
             Notify(true);
         }
 
+        public void ChooseBackupMode(string mode)
+        {
+            RequireIdle();
+            if ((State.Step != SetupStep.Computer && State.Step != SetupStep.Folders) || (mode != "Folder" && mode != "Media"))
+                throw new InvalidOperationException("Choose folder backups or backups with media processing before preparation.");
+            if (State.BackupMode != mode)
+            {
+                State.BackupMode = mode;
+                State.InvalidateChecks(); State.RecoveryExported = false; State.RecoveryConfirmed = false;
+            }
+            Notify(true);
+        }
+
         public void Back()
         {
             RequireIdle();

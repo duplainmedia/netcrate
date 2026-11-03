@@ -231,8 +231,8 @@ namespace NetCrate.Setup
         private void ComputerScreen(StackPanel panel)
         {
             Heading(panel, "Which computer is this?", null);
-            panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "Stores your projects and receives proxies.", "\uE770"));
-            panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "Stores backups and creates proxies.", "\uE977"));
+            panel.Children.Add(RoleCard(ComputerRole.EditingComputer, "Editing Computer", "Stores the files you want to back up.", "\uE770"));
+            panel.Children.Add(RoleCard(ComputerRole.BackupServer, "Backup Server", "Stores backups on its connected drive.", "\uE977"));
             FlowDiagram(panel);
         }
 
@@ -292,7 +292,7 @@ namespace NetCrate.Setup
             TextBlock editing = Text("Editing Computer", 12, Theme.Text);
             editing.VerticalAlignment = VerticalAlignment.Center;
             flow.Children.Add(editing);
-            TextBlock arrows = Text("Footage  \u2192\n\u2190  Proxies", 12, Theme.Accent);
+            TextBlock arrows = Text("Files  \u2192\nPrivate backups", 12, Theme.Accent);
             arrows.TextAlignment = TextAlignment.Center;
             Grid.SetColumn(arrows, 1);
             flow.Children.Add(arrows);
@@ -307,13 +307,16 @@ namespace NetCrate.Setup
         private void FolderScreen(StackPanel panel)
         {
             bool editing = controller.State.Role == ComputerRole.EditingComputer;
-            Heading(panel, editing ? "Where are your projects?" : "Where should backups go?", editing
-                ? "Choose the folder that contains your project folders. You will choose a project to back up after setup."
-                : "Choose a folder for backups.");
+            bool media = controller.State.BackupMode == "Media";
+            Heading(panel, editing ? "Which files should NetCrate back up?" : "Where should backups go?", editing
+                ? (media ? "Choose the folder containing your video projects. Select one project after setup." : "Choose an ordinary local folder. After setup, back up this whole folder or any folder inside it.")
+                : "Choose storage on a connected drive. Select Folder backups for an ordinary source, or Backups and media processing if the source requests proxies.");
+            panel.Children.Add(ModeChoice("Folder", "Folder backups"));
+            panel.Children.Add(ModeChoice("Media", "Backups and media processing"));
             Border choice = new Border { Background = Theme.Brush(Theme.Surface), BorderBrush = Theme.Brush(Theme.Border), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(22) };
             StackPanel contents = new StackPanel();
             choice.Child = contents;
-            contents.Children.Add(Text(editing ? "Project folder" : "Backup storage", 13, Theme.Muted));
+            contents.Children.Add(Text(editing ? (media ? "Project folder" : "Files to back up") : "Backup storage", 13, Theme.Muted));
             TextBlock path = Text(String.IsNullOrEmpty(controller.State.Folder) ? "No folder selected" : controller.State.Folder, 17, Theme.Text);
             path.Margin = new Thickness(0, 9, 0, 18);
             contents.Children.Add(path);
@@ -321,7 +324,7 @@ namespace NetCrate.Setup
             pick.HorizontalAlignment = HorizontalAlignment.Left;
             contents.Children.Add(pick);
             panel.Children.Add(choice);
-            if (editing)
+            if (editing && media)
             {
                 TextBlock hint = Text("Returned proxies go into each project's Proxies folder.", 13, Theme.Muted);
                 hint.Margin = new Thickness(0, 18, 0, 0);
@@ -329,11 +332,20 @@ namespace NetCrate.Setup
             }
         }
 
+        private RadioButton ModeChoice(string mode, string label)
+        {
+            RadioButton choice = new RadioButton { Content = label, GroupName = "BackupMode", IsChecked = controller.State.BackupMode == mode,
+                IsEnabled = !controller.Busy, Margin = new Thickness(0, 0, 0, 12), Padding = new Thickness(8), Foreground = Theme.Brush(Theme.Text) };
+            AutomationProperties.SetName(choice, label);
+            choice.Checked += delegate { if (controller.State.BackupMode != mode) controller.ChooseBackupMode(mode); };
+            return choice;
+        }
+
         private async void PickFolder()
         {
             using (Forms.FolderBrowserDialog picker = new Forms.FolderBrowserDialog())
             {
-                picker.Description = controller.State.Role == ComputerRole.EditingComputer ? "Choose the folder containing your video projects" : "Choose backup storage";
+                picker.Description = controller.State.Role == ComputerRole.EditingComputer ? (controller.State.BackupMode == "Media" ? "Choose the folder containing your video projects" : "Choose a folder containing your files") : "Choose backup storage";
                 picker.ShowNewFolderButton = true;
                 if (!String.IsNullOrEmpty(controller.State.Folder)) picker.SelectedPath = controller.State.Folder;
                 if (picker.ShowDialog(new WindowOwner(new System.Windows.Interop.WindowInteropHelper(this).Handle)) == Forms.DialogResult.OK)
@@ -457,7 +469,7 @@ namespace NetCrate.Setup
         private void CheckScreen(StackPanel panel)
         {
             Heading(panel, "Check the round trip", controller.State.Role == ComputerRole.EditingComputer
-                ? "A short generated sample will travel to the Backup Server. Its returned proxy must pass local verification."
+                ? (controller.State.BackupMode == "Folder" ? "A generated text file will be backed up, restored to a disposable copy and compared with its known original bytes." : "A short generated sample will travel to the Backup Server. Its returned proxy must pass local verification.")
                 : "The Editing Computer starts the sample check. Keep this computer on while it runs.");
             if (controller.State.Role == ComputerRole.EditingComputer)
                 panel.Children.Add(Button("Run sample check", async () => await RunSafeAsync(() => controller.CheckSampleAsync(CheckToken)), true));
@@ -466,8 +478,8 @@ namespace NetCrate.Setup
         private void CompleteScreen(StackPanel panel)
         {
             Heading(panel, controller.State.Role == ComputerRole.EditingComputer ? "Your computers are ready" : "The Backup Server is ready",
-                controller.State.Role == ComputerRole.EditingComputer ? "The sample proxy returned and passed verification. You can now choose a project to back up."
-                : "Run the sample check on the Editing Computer. Keep this computer on and signed in while backups and proxies run.");
+                controller.State.Role == ComputerRole.EditingComputer ? (controller.State.BackupMode == "Folder" ? "The sample restore passed verification. You can now choose a folder to back up." : "The sample proxy returned and passed verification. You can now choose a project to back up.")
+                : "Run the sample check on the Editing Computer. Keep this computer on and signed in while backups run.");
             panel.Children.Add(Button("Open NetCrate", async () => await RunSafeAsync(async () =>
             {
                 await controller.FinishAsync(CheckToken);

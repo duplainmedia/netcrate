@@ -22,6 +22,12 @@ class SetupStorageTests
             JsonSetupStore store = new JsonSetupStore(statePath);
             Assert(store.Load() == null, "A fresh setup returned existing state.");
             SetupState state = new SetupState { Role = ComputerRole.EditingComputer, Folder = Path.Combine(root, "Projects 日本語") };
+            var encoded = new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(state)) as System.Collections.Generic.Dictionary<string, object>;
+            Assert(encoded.ContainsKey("BackupMode") && Convert.ToString(encoded["BackupMode"]) == "Folder", "Brand-new setup did not explicitly default to folder backups.");
+            Directory.CreateDirectory(Path.GetDirectoryName(statePath));
+            File.WriteAllText(statePath, "{\"Version\":1,\"InstallationId\":\"11111111111111111111111111111111\",\"Role\":1,\"Step\":2}");
+            var legacy = new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(store.Load())) as System.Collections.Generic.Dictionary<string, object>;
+            Assert(Convert.ToString(legacy["BackupMode"]) == "Media", "Saved v1 setup without a mode lost media behavior.");
             store.Save(state);
             Assert(store.Load().Folder == state.Folder, "Unicode folder choice did not survive a restart.");
             state.Step = SetupStep.Prepare;

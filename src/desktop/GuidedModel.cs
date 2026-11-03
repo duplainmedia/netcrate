@@ -28,13 +28,23 @@ namespace NetCrate {
    }
    foreach(string file in Files(Path.Combine(settings.StateRoot,"Queue"),"*.json").OrderBy(p=>T(ReadJson(p),"CreatedUtc"))) {
     var queue=ReadJson(file);if(queue==null||B(queue,"Sample"))continue;
-    Job job=Get(FromSource(S(queue,"Project")));if(job==null)continue;
+    string mode=S(queue,"BackupMode");if(mode=="")mode="Media";if(mode!="Folder"&&mode!="Media")continue;
+    Job job=Get(FromSource(S(queue,"Project"),mode));if(job==null)continue;
     DateTime when=T(queue,"CreatedUtc");if(when<job.SourceUtc)continue;
-    job.SourceUtc=when;job.UpdatedUtc=T(queue,"UpdatedUtc");job.Revision=S(queue,"Id");job.SnapshotId=S(queue,"SnapshotId");
+    DateTime completed=T(queue,"BackupCompletedUtc");
+    // Keep a previous successful original when a later attempt fails.
+    bool prior=job.BackupCompleted&&completed==DateTime.MinValue;
+    job.SourceUtc=when;job.UpdatedUtc=T(queue,"UpdatedUtc");job.Revision=S(queue,"Id");if(!prior)job.SnapshotId=S(queue,"SnapshotId");
+    job.BackupMode=mode;job.MediaState=S(queue,"MediaState");if(completed!=DateTime.MinValue)job.BackupCompletedUtc=completed;
     job.BackupCompleted=Hex(job.SnapshotId);job.BackupVerified=false;job.Active=true;job.Attention=false;job.Progress=-1;
     string state=S(queue,"State");
     job.Phase=state=="BackingUp"?"Backing up":state=="WaitingForProxies"||state=="Ready"?"Waiting for proxies":state=="NeedsAttention"?"Backup needs attention":"Backup queued";
     job.Detail="Keep both computers on and signed in. NetCrate retries interrupted work automatically.";job.Attention=state=="NeedsAttention";
+    if(mode=="Folder") {
+     job.Active=state=="Queued"||state=="BackingUp";job.BackupCompleted=Hex(job.SnapshotId)&&job.BackupCompletedUtc!=DateTime.MinValue;
+     if(state=="Ready"&&job.BackupCompleted){job.Phase="Backed up";job.Progress=100;job.Detail="Original files are backed up. Media processing is off.";}
+     continue;
+    }
     string requestId=S(queue,"RequestId");if(!Hex(requestId))continue;
     var progress=ReadJson(Path.Combine(settings.StateRoot,"JobProgress",requestId+".json"));
     if(progress!=null&&S(progress,"SnapshotId")==job.SnapshotId) {

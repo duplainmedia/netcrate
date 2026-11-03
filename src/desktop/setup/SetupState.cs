@@ -13,6 +13,7 @@ namespace NetCrate.Setup
         public ComputerRole Role { get; set; }
         public SetupStep Step { get; set; }
         public string Folder { get; set; }
+        public string BackupMode { get; set; }
         public string NetworkAddress { get; set; }
         public bool Prepared { get; set; }
         public bool RecoveryExported { get; set; }
@@ -23,6 +24,7 @@ namespace NetCrate.Setup
         public SetupState()
         {
             Version = 1;
+            BackupMode = "Folder";
             InstallationId = Guid.NewGuid().ToString("N");
         }
 
