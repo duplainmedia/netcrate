@@ -269,19 +269,39 @@ function Get-MaintenanceFingerprint($Inventory) {
         return [Convert]::ToHexString($hash.GetHashAndReset()).ToLowerInvariant()
     } finally {$hash.Dispose()}
 }
+function Get-MaintenanceCleanupPrior($Context,[string]$Id='') {
+    $folder=[IO.Path]::Combine($Context.Owner.Root,'Maintenance','Requests')
+    $eligible=@(); if([IO.Directory]::Exists($folder)) { foreach($file in [IO.Directory]::EnumerateFiles($folder,'*.json')) {
+        $r=Read-NetCrateJson $file -MaximumBytes 32768
+        if($r.Action -cne 'ApplyRetention' -or $r.InstallationId -cne $Context.Owner.InstallationId) {continue}
+        if(($r.State -ceq 'Running' -and $r.PSObject.Properties.Name -ccontains 'Step' -and $r.Step -ceq 'ForgetStarted') -or ($r.State -ceq 'NeedsAttention' -and $r.PSObject.Properties.Name -ccontains 'Code' -and $r.Code -ceq 'forget-uncertain')) {throw 'A previous forget is uncertain. Review storage before cleanup.'}
+        if($r.State -ceq 'NeedsAttention' -and $r.PSObject.Properties.Name -ccontains 'Code' -and $r.Code -ceq 'prune-interrupted' -and $r.Step -ceq 'PruneStarted' -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOf' -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOperationId') {
+            if($r.OperationId -cnotmatch '^[a-f0-9]{32}$' -or [IO.Path]::GetFileNameWithoutExtension($file) -cne $r.OperationId -or $r.PreviewId -cnotmatch '^[a-f0-9]{32}$' -or $r.Confirm -isnot [bool] -or -not $r.Confirm) {throw 'A previous cleanup journal is invalid.'}
+            $prior=Read-NetCrateJson ([IO.Path]::Combine($Context.Owner.Root,'Maintenance','Previews',$r.PreviewId+'.json')) -MaximumBytes 262144
+            if($prior.Version -ne 1 -or $prior.PreviewId -cne $r.PreviewId -or $prior.Policy -cne 'KeepLatestPerFolder' -or $prior.InstallationId -cne $Context.Owner.InstallationId -or $prior.PrimaryId -cne $Context.Binding.PrimaryId -or $prior.ResultsId -cne $Context.Binding.ResultsId -or $prior.Used -isnot [bool] -or -not $prior.Used -or @($prior.Candidates).Count -eq 0 -or @($prior.Candidates).Count -gt 256 -or @($prior.Candidates|Where-Object {$_ -cnotmatch '^[a-f0-9]{64}$'}).Count) {throw 'The previous forget cannot be verified.'}
+            $eligible+=@($r)
+        }
+    }}
+    if($eligible.Count -ne 1 -or ($Id -and $eligible[0].OperationId -cne $Id)) {throw 'No unique verified previous forget is available for cleanup.'}
+    return $eligible[0]
+}
 function New-MaintenancePreview($Context,[string]$Policy,[int]$Count) {
-    if($Policy -cnotin @('KeepAll','KeepLatestPerFolder')){throw 'Choose a supported retention policy.'}
+    if($Policy -cnotin @('KeepAll','KeepLatestPerFolder','CompleteCleanup')){throw 'Choose a supported retention policy.'}
+    $prior=if($Policy -ceq 'CompleteCleanup'){Get-MaintenanceCleanupPrior $Context}else{$null}
+    if($prior){$Count=1}
     $inventory=if($Policy -ceq 'KeepAll'){$null}else{Get-MaintenanceInventory $Context $Count}
+    if($prior){$old=Read-NetCrateJson ([IO.Path]::Combine($Context.Owner.Root,'Maintenance','Previews',$prior.PreviewId+'.json'));$present=@($inventory.PrimaryWire|ConvertFrom-Json|ForEach-Object {$_.id});if(@($old.Candidates|Where-Object {$_ -cin $present}).Count){throw 'The previous forget is not reflected in storage.'}}
     $created=[DateTimeOffset]::UtcNow
     $fingerprint=if($inventory){Get-MaintenanceFingerprint $inventory}else{[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes('keep-all'))).ToLowerInvariant()}
     $items=@();if($inventory){$items=@(foreach($item in $inventory.Eligible){
-        $candidate=$item.Id -cin $inventory.Candidates
+        $candidate=$Policy -cne 'CompleteCleanup' -and $item.Id -cin $inventory.Candidates
         $path=$item.Path.Substring(1,1)+':'+$item.Path.Substring(2).Replace('/','\')
         [pscustomobject]@{SnapshotId=$item.Id;Project=$path;BackupCompletedUtc=$item.Time.ToString('o');Candidate=$candidate;Reason=if($item.Id -cin $inventory.Protected){'Protected dependency'}else{'Latest retained'}}
     })}
-    $newest='';if($inventory){$retained=@($inventory.Eligible|Where-Object {$_.Id -cnotin $inventory.Candidates}|Sort-Object Time -Descending|Select-Object -First 1);if($retained.Count){$newest=$retained[0].Time.ToString('o')}}
-    $candidateIds=@();if($inventory){$candidateIds=@($inventory.Candidates|Where-Object {$null -ne $_})}
-    $preview=[ordered]@{Version=1;PreviewId=[guid]::NewGuid().ToString('N');InstallationId=$Context.Owner.InstallationId;PrimaryId=$Context.Binding.PrimaryId;ResultsId=$Context.Binding.ResultsId;Policy=$Policy;Count=$Count;CreatedUtc=$created.ToString('o');ExpiresUtc=$created.AddMinutes(15).ToString('o');Fingerprint=$fingerprint;Candidates=$candidateIds;Items=$items;EligibleCount=if($inventory){@($inventory.Eligible).Count}else{0};ProtectedCount=if($inventory){$inventory.SnapshotCount-@($inventory.Candidates).Count}else{0};NewestRetainedUtc=$newest;Used=$false}
+    $newest='';if($inventory){$retained=@($inventory.Eligible|Where-Object {$Policy -ceq 'CompleteCleanup' -or $_.Id -cnotin $inventory.Candidates}|Sort-Object Time -Descending|Select-Object -First 1);if($retained.Count){$newest=$retained[0].Time.ToString('o')}}
+    $candidateIds=@();if($inventory -and $Policy -cne 'CompleteCleanup'){$candidateIds=@($inventory.Candidates|Where-Object {$null -ne $_})}
+    $preview=[ordered]@{Version=1;PreviewId=[guid]::NewGuid().ToString('N');InstallationId=$Context.Owner.InstallationId;PrimaryId=$Context.Binding.PrimaryId;ResultsId=$Context.Binding.ResultsId;Policy=$Policy;Count=$Count;CreatedUtc=$created.ToString('o');ExpiresUtc=$created.AddMinutes(15).ToString('o');Fingerprint=$fingerprint;Candidates=$candidateIds;Items=$items;EligibleCount=if($inventory){@($inventory.Eligible).Count}else{0};ProtectedCount=if($inventory){$inventory.SnapshotCount-$candidateIds.Count}else{0};NewestRetainedUtc=$newest;Used=$false}
+    if($prior){$preview['PriorOperationId']=$prior.OperationId}
     $folder=Set-NetCratePrivateDirectory ([IO.Path]::Combine($Context.Owner.Root,'Maintenance','Previews'))
     Write-NetCrateJson ([IO.Path]::Combine($folder,$preview.PreviewId+'.json')) $preview
     return [pscustomobject]$preview
@@ -290,7 +310,7 @@ function Test-MaintenancePreview($Context,[string]$PreviewId,[DateTimeOffset]$No
     if($PreviewId -cnotmatch '^[a-f0-9]{32}$'){throw 'Choose a current storage preview.'}
     $file=[IO.Path]::Combine($Context.Owner.Root,'Maintenance','Previews',$PreviewId+'.json')
     $preview=Read-NetCrateJson $file -MaximumBytes 262144
-    if($preview.Version -ne 1 -or $preview.PreviewId -cne $PreviewId -or $preview.InstallationId -cne $Context.Owner.InstallationId -or $preview.PrimaryId -cne $Context.Binding.PrimaryId -or $preview.ResultsId -cne $Context.Binding.ResultsId -or $preview.Policy -cnotin @('KeepAll','KeepLatestPerFolder') -or $preview.Used -isnot [bool] -or $preview.Used -or $preview.Fingerprint -cnotmatch '^[a-f0-9]{64}$'){throw 'This preview is invalid or already used. Create a new preview.'}
+    if($preview.Version -ne 1 -or $preview.PreviewId -cne $PreviewId -or $preview.InstallationId -cne $Context.Owner.InstallationId -or $preview.PrimaryId -cne $Context.Binding.PrimaryId -or $preview.ResultsId -cne $Context.Binding.ResultsId -or $preview.Policy -cnotin @('KeepAll','KeepLatestPerFolder','CompleteCleanup') -or $preview.Used -isnot [bool] -or $preview.Used -or $preview.Fingerprint -cnotmatch '^[a-f0-9]{64}$'){throw 'This preview is invalid or already used. Create a new preview.'}
     $created=([DateTimeOffset]$preview.CreatedUtc).ToUniversalTime();$expires=([DateTimeOffset]$preview.ExpiresUtc).ToUniversalTime()
     if($expires -ne $created.AddMinutes(15) -or $Now.ToUniversalTime() -lt $created -or $Now.ToUniversalTime() -ge $expires){throw 'This preview expired. Create a new preview.'}
     $ids=@($preview.Candidates)
@@ -302,7 +322,8 @@ function Test-MaintenancePreview($Context,[string]$PreviewId,[DateTimeOffset]$No
         if(($preview.Count -isnot [int] -and $preview.Count -isnot [long]) -or $preview.Count -lt 1 -or $preview.Count -gt 10000){throw 'The preview policy is invalid.'}
         $inventory=Get-MaintenanceInventory $Context ([int]$preview.Count)
         $digest=Get-MaintenanceFingerprint $inventory
-        $currentIds=@($inventory.Candidates)
+        $currentIds=@(if($preview.Policy -cne 'CompleteCleanup'){$inventory.Candidates})
+        if($preview.Policy -ceq 'CompleteCleanup'){$null=Get-MaintenanceCleanupPrior $Context $preview.PriorOperationId}
         $items=@($preview.Items)
         if($items.Count -ne @($inventory.Eligible).Count -or $preview.EligibleCount -ne $items.Count -or $preview.ProtectedCount -ne ($inventory.SnapshotCount-$currentIds.Count)){throw 'The displayed preview differs from storage. Create a new preview.'}
         foreach($original in $inventory.Eligible){
@@ -318,6 +339,11 @@ function Test-MaintenancePreview($Context,[string]$PreviewId,[DateTimeOffset]$No
     if($digest -cne $preview.Fingerprint -or (($ids|Sort-Object) -join ',') -cne (($currentIds|Sort-Object) -join ',')){throw 'Storage changed since this preview. Create a new preview.'}
     return $preview
 }
+function Test-MaintenancePreviewForCleanup($Context,$Preview) {
+    $null=Get-MaintenanceCleanupPrior $Context $Preview.PriorOperationId
+    $inventory=Get-MaintenanceInventory $Context ([int]$Preview.Count)
+    if((Get-MaintenanceFingerprint $inventory) -cne $Preview.Fingerprint -or [DateTimeOffset]::UtcNow -ge ([DateTimeOffset]$Preview.ExpiresUtc).ToUniversalTime()) {throw 'Storage changed since this cleanup preview.'}
+}
 # Runtime calls this only while it owns its worker mutex and has stopped its
 # endpoint. Do not expose this function through the desktop action bridge.
 function Invoke-MaintenanceApply($Context,$Operation,[string]$OperationFile) {
@@ -328,6 +354,19 @@ function Invoke-MaintenanceApply($Context,$Operation,[string]$OperationFile) {
     $Operation | Add-Member -NotePropertyName Step -NotePropertyValue 'Confirmed' -Force
     Write-NetCrateJson $OperationFile $Operation
     $ids=@($preview.Candidates)
+    if($preview.Policy -ceq 'CompleteCleanup') {
+        $Operation | Add-Member -NotePropertyName CleanupOf -NotePropertyValue $preview.PriorOperationId -Force
+        $null=Test-MaintenancePreviewForCleanup $Context $preview
+        $Operation.Step='PruneStarted'; Write-NetCrateJson $OperationFile $Operation
+        try {
+            $result=Invoke-NetCrateProcess $Context.Settings.Tools.Restic @('--repo',$Context.Binding.PrimaryPath,'--no-cache','prune') @{RESTIC_PASSWORD=$Context.Secrets.PrimaryPassword} -TimeoutSeconds 86400
+            if($result.ExitCode -ne 0){throw 'Prune did not finish.'}
+            $priorPath=[IO.Path]::Combine($Context.Owner.Root,'Maintenance','Requests',$preview.PriorOperationId+'.json')
+            $prior=Get-MaintenanceCleanupPrior $Context $preview.PriorOperationId
+            $prior | Add-Member -NotePropertyName CleanupOperationId -NotePropertyValue $Operation.OperationId -Force; $prior.State='Succeeded'; $prior.Step='Completed'; $prior.Code='cleanup-completed'; Write-NetCrateJson $priorPath $prior
+            $Operation.Step='Completed';Write-NetCrateJson $OperationFile $Operation;return
+        } catch { $Operation.State='NeedsAttention';$Operation | Add-Member -NotePropertyName Code -NotePropertyValue 'prune-interrupted' -Force;Write-NetCrateJson $OperationFile $Operation;throw 'Cleanup did not finish. Create a new cleanup preview.' }
+    }
     if(-not $ids.Count){$Operation.Step='Completed';Write-NetCrateJson $OperationFile $Operation;return}
     # Re-enumerate immediately before the destructive command, and refuse any
     # change since the saved preview. All IDs remain server-generated full IDs.
@@ -392,7 +431,7 @@ function Invoke-NetCrateMaintenanceRequest {
     foreach($key in $Parameters.Keys){if($key -cnotin $allowed){throw 'The storage request contains an unsupported field.'}}
     $record=[ordered]@{Version=1;InstallationId=$InstallationId;OperationId=[guid]::NewGuid().ToString('N');Action=$Action;State='Queued';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o')}
     if($Action -ceq 'PreviewRetention'){
-        if($Parameters.Policy -cnotin @('KeepAll','KeepLatestPerFolder')){throw 'Choose a supported retention policy.'}
+        if($Parameters.Policy -cnotin @('KeepAll','KeepLatestPerFolder','CompleteCleanup')){throw 'Choose a supported retention policy.'}
         $record.Policy=$Parameters.Policy
         if($Parameters.Policy -ceq 'KeepLatestPerFolder'){
             $count=$Parameters.Count
@@ -449,7 +488,7 @@ function Invoke-NetCrateMaintenancePass([string]$Root,[string]$InstallationId,[s
         $record=Read-NetCrateJson $file -MaximumBytes 32768
         if($record.Version -ne 1 -or $record.InstallationId -cne $InstallationId -or $record.OperationId -cnotmatch '^[a-f0-9]{32}$' -or [IO.Path]::GetFileNameWithoutExtension($file) -cne $record.OperationId -or $record.Action -cnotin @('CheckStorage','PreviewRetention','ApplyRetention')){throw 'A storage request record is invalid.'}
         if($record.State -ceq 'Running'){
-            $record.State='NeedsAttention';$record|Add-Member -NotePropertyName Code -NotePropertyValue 'interrupted' -Force;Write-NetCrateJson $file $record;continue
+            $record.State='NeedsAttention';$code=if($record.Action -ceq 'ApplyRetention' -and $record.PSObject.Properties.Name -ccontains 'Step' -and $record.Step -cin @('ForgetVerified','PruneStarted')){'prune-interrupted'}elseif($record.Action -ceq 'ApplyRetention' -and $record.PSObject.Properties.Name -ccontains 'Step' -and $record.Step -ceq 'ForgetStarted'){'forget-uncertain'}else{'interrupted'};if($code -ceq 'prune-interrupted'){$record.Step='PruneStarted'};$record|Add-Member -NotePropertyName Code -NotePropertyValue $code -Force;Write-NetCrateJson $file $record;continue
         }
         if($record.State -cne 'Queued'){continue}
         $record.State='Running';Write-NetCrateJson $file $record
@@ -459,7 +498,7 @@ function Invoke-NetCrateMaintenancePass([string]$Root,[string]$InstallationId,[s
                 $health=Invoke-MaintenanceCheck $context
                 $record.State=if($health.Primary.State -ceq 'Succeeded' -and $health.Results.State -ceq 'Succeeded'){'Succeeded'}else{'Failed'}
             } elseif($record.Action -ceq 'PreviewRetention'){
-                $count=if($record.Policy -ceq 'KeepAll'){0}else{[int]$record.Count}
+                $count=if($record.Policy -cin @('KeepAll','CompleteCleanup')){0}else{[int]$record.Count}
                 $preview=New-MaintenancePreview $context $record.Policy $count
                 $record|Add-Member -NotePropertyName PreviewId -NotePropertyValue $preview.PreviewId -Force
                 $record.State='Succeeded'
@@ -527,7 +566,7 @@ function Get-NetCrateMaintenanceStatus {
         $previewPath=[IO.Path]::Combine($Root,'Maintenance','Previews',$operation.PreviewId+'.json')
         $preview=Read-NetCrateJson $previewPath -MaximumBytes 262144
         if($preview.Version -ne 1 -or $preview.InstallationId -cne $InstallationId -or $preview.PreviewId -cne $operation.PreviewId -or @($preview.Items).Count -gt 256 -or @($preview.Candidates).Count -gt 256){throw 'A stored preview is invalid.'}
-        if(-not $preview.Used -and ([DateTimeOffset]$preview.ExpiresUtc).ToUniversalTime() -gt [DateTimeOffset]::UtcNow){$current=[pscustomobject]@{PreviewId=$preview.PreviewId;ExpiresUtc=$preview.ExpiresUtc;CandidateCount=@($preview.Candidates).Count;EligibleCount=$preview.EligibleCount;ProtectedCount=$preview.ProtectedCount;NewestRetainedUtc=$preview.NewestRetainedUtc;Items=@($preview.Items)};break}
+        if(-not $preview.Used -and ([DateTimeOffset]$preview.ExpiresUtc).ToUniversalTime() -gt [DateTimeOffset]::UtcNow){$current=[pscustomobject]@{PreviewId=$preview.PreviewId;ExpiresUtc=$preview.ExpiresUtc;Policy=$preview.Policy;CandidateCount=@($preview.Candidates).Count;EligibleCount=$preview.EligibleCount;ProtectedCount=$preview.ProtectedCount;NewestRetainedUtc=$preview.NewestRetainedUtc;Items=@($preview.Items)};break}
     }
     return [pscustomobject]@{FreeBytes=$bytes;LowSpace=($bytes -ge 0 -and $bytes -lt 5GB);StorageCode=$storageCode;Health=$health;Operations=$operations;Preview=$current}
 }

@@ -73,7 +73,7 @@ function Assert-NetCrateRelativePath {
         throw 'The media path is unsafe.'
     }
     foreach ($part in $Path.Split('/')) {
-        if ($part -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)' -or $part.Length -gt 240) { throw 'The media filename is not supported.' }
+        if ($part -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)' -or $part.Length -gt 255) { throw 'The media filename is not supported.' }
     }
     return $Path
 }

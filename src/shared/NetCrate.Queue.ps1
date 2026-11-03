@@ -43,7 +43,7 @@ function Add-NetCrateBackupQueueCore {
         $id = $association.JobId
     } else {
         $active = @([IO.Directory]::EnumerateFiles($queue, '*.json') | ForEach-Object { Read-NetCrateJson $_ } | Where-Object {
-            $_.Project.Equals($path, [StringComparison]::OrdinalIgnoreCase) -and $_.State -cin @('Queued','BackingUp','NeedsAttention') -and $_.SnapshotId -cnotmatch '^[a-f0-9]{64}$'
+            $_.Project.Equals($path, [StringComparison]::OrdinalIgnoreCase) -and $_.State -cin @('Queued','BackingUp','NeedsAttention') -and ($_.SnapshotId -cnotmatch '^[a-f0-9]{64}$' -or ($_.PSObject.Properties.Name -contains 'ReceiptConfirmed' -and -not $_.ReceiptConfirmed))
         } | Select-Object -First 1)
         $reservations = [IO.Path]::Combine($Root, 'ScheduleOccurrences')
         $reserved = @(if ([IO.Directory]::Exists($reservations)) { [IO.Directory]::EnumerateFiles($reservations, '*.json') | ForEach-Object { Read-NetCrateJson $_ } | Where-Object {
@@ -61,7 +61,7 @@ function Add-NetCrateBackupQueueCore {
         $existing.State = 'Queued'; $existing.RetryAfterUtc = $Now.ToString('o'); Write-NetCrateJson $file $existing
     } else {
         Write-NetCrateJson $file ([ordered]@{ Version = 1; Id = $id; Project = $path; State = 'Queued'; Sample = [bool]$Sample; BackupMode = $mode
-            BackupCompletedUtc = ''; MediaState = $(if ($mode -ceq 'Folder') { 'Off' } else { 'Pending' })
+            BackupCompletedUtc = ''; ReceiptConfirmed = $false; FailureCategory = ''; MediaState = $(if ($mode -ceq 'Folder') { 'Off' } else { 'Pending' })
             SnapshotId = ''; RequestId = ''; CreatedUtc = $Now.ToString('o'); UpdatedUtc = $Now.ToString('o'); RetryAfterUtc = $Now.ToString('o') })
     }
     return $file
@@ -94,15 +94,18 @@ function Invoke-NetCrateQueue {
                         }
                     }
                 }
-                $status.State = 'Ready'; $status.MediaState = 'Off'; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
+                $status.State = 'Ready'; $status.MediaState = 'Off'; $status | Add-Member -NotePropertyName FailureCategory -NotePropertyValue '' -Force; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
                 continue
             }
             $request = Invoke-NetCrateBackup $Root $Settings $status.Project $file
             $status = Read-NetCrateJson $file
             $status.RequestId = Get-NetCrateRequestId $request.SnapshotId $request.ProjectPath $request.Recipe
-            $status.MediaState = 'Pending'; $status.State = 'WaitingForProxies'; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
+            $status | Add-Member -NotePropertyName FailureCategory -NotePropertyValue '' -Force; $status.MediaState = 'Pending'; $status.State = 'WaitingForProxies'; $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
         } catch {
+            $category = [string]$_.Exception.Data['NetCrateCategory']
+            if ($category -cnotin @('unsupported-entry','source-incomplete','storage-unavailable')) { $category = 'source-incomplete' }
             $status = Read-NetCrateJson $file; $status.State = 'NeedsAttention'
+            $status | Add-Member -NotePropertyName FailureCategory -NotePropertyValue $category -Force
             if ((Get-NetCrateBackupMode $status) -ceq 'Media') { $status | Add-Member -NotePropertyName MediaState -NotePropertyValue 'NeedsAttention' -Force }
             $status.RetryAfterUtc = [DateTime]::UtcNow.AddSeconds(30).ToString('o'); $status.UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Write-NetCrateJson $file $status
         }

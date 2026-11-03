@@ -9,7 +9,7 @@ Import-Module (Join-Path $PSScriptRoot 'NetCrate.Maintenance.psm1')
 Import-Module (Join-Path $PSScriptRoot 'NetCrate.Endpoint.psm1')
 $owner = Get-NetCrateOwner $Root
 $created = $false
-$mutex = [Threading.Mutex]::new($false, ('Local\NetCrate-Runtime-' + $owner.UserSid + '-' + $owner.InstallationId), [ref]$created)
+$mutex = [Threading.Mutex]::new($false, ('Global\NetCrate-Runtime-' + $owner.UserSid + '-' + $owner.InstallationId), [ref]$created)
 $owned = $false; $workerMutex=$null; $workerOwned=$false; $endpointState = [pscustomobject]@{Process=$null;Job=$null}
 $startedUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
 try {

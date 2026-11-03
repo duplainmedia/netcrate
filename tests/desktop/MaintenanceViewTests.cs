@@ -34,7 +34,9 @@ class MaintenanceViewTests {
    if(choice.SelectedIndex!=1||count.Text!="3"||editor.Message!=error)throw new Exception("Polling discarded an error or unsaved policy.");
   }
   service.StorageCode="unavailable";view.RefreshStatusAsync().GetAwaiter().GetResult();
-  if(!Find<TextBlock>(view).Exists(t=>t.Text.Contains("Reconnect the backup drive")&&t.Text.Contains("2026-01-02T03:04:05Z")))throw new Exception("Offline dialog hid the prior successful check.");
+  if(!Find<TextBlock>(view).Exists(t=>t.Text.Contains("Reconnect the backup drive")&&t.Text.Contains("2026")&&!t.Text.Contains("2026-01-02T03:04:05Z")&&t.Text.Contains("UTC")))throw new Exception("Offline dialog hid the prior successful check.");
+  var row=new MaintenanceItem{Project="Folder",BackupCompletedUtc="2026-01-02T03:04:05.0000000Z",Candidate=true}.ToString();
+  if(row.Contains("T03:04:05")||!row.Contains("UTC"))throw new Exception("Preview row did not display a readable local date with zone.");
   service.StorageCode="unverified";view.RefreshStatusAsync().GetAwaiter().GetResult();
   if(preview.IsEnabled||confirm.IsEnabled||!check.IsEnabled)throw new Exception("Unverified storage enabled retention or disabled health checks.");
   service.StorageCode="available";view.RefreshStatusAsync().GetAwaiter().GetResult();

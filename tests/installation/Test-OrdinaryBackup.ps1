@@ -67,7 +67,7 @@ Reject { Add-NetCrateBackupQueue $source $settings $link }
 [IO.Directory]::Delete($link)
 $offline="$active/Notes/offline.txt";[IO.File]::WriteAllText($offline,'not fully local')
 [IO.File]::SetAttributes($offline,[IO.FileAttributes]::Offline)
-try { $q=Add-NetCrateBackupQueue $source $settings "$active/Notes";Invoke-NetCrateQueue $source $settings;$bad=Read-NetCrateJson $q;Assert ($bad.State -ceq 'NeedsAttention' -and -not $bad.SnapshotId) 'An offline input became a completed backup.' } finally { [IO.File]::SetAttributes($offline,[IO.FileAttributes]::Normal);[IO.File]::Delete($offline) }
+try { $q=Add-NetCrateBackupQueue $source $settings "$active/Notes";Invoke-NetCrateQueue $source $settings;$bad=Read-NetCrateJson $q;Assert ($bad.State -ceq 'NeedsAttention' -and -not $bad.SnapshotId -and $bad.FailureCategory -ceq 'unsupported-entry') 'An offline input did not preserve its safe category.' } finally { [IO.File]::SetAttributes($offline,[IO.FileAttributes]::Normal);[IO.File]::Delete($offline) }
 $capable=$settings.PSObject.Copy();$capable.BackupMode='Media';$capable | Add-Member SourceBackupMode Folder
 # No worker identity or Results credentials are available here. Folder requests
 # must not invoke the media poll even on a media-capable server.
@@ -82,9 +82,9 @@ $workflow=Get-Module NetCrate.Workflow
  $saved=(Get-Command Invoke-NetCrateProcess).ScriptBlock
  try {
   function script:Invoke-NetCrateProcess { [pscustomobject]@{ExitCode=3;Output=('{"message_type":"summary","snapshot_id":"'+('a'*64)+'"}');Diagnostic='incomplete read'} }
-  $q=Add-NetCrateBackupQueue $root $settings $path; Invoke-NetCrateQueue $root $settings
+  $q=Add-NetCrateBackupQueue $root $settings $path; $retry=Read-NetCrateJson $q; $retry.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o'); Write-NetCrateJson $q $retry; Invoke-NetCrateQueue $root $settings
   $bad=Read-NetCrateJson $q
-  if ($bad.State -cne 'NeedsAttention' -or $bad.SnapshotId -or $bad.BackupCompletedUtc) { throw 'Restic exit 3 was promoted into completion.' }
+  if ($bad.State -cne 'NeedsAttention' -or $bad.SnapshotId -or $bad.BackupCompletedUtc -or $bad.FailureCategory -cne 'source-incomplete') { throw 'Restic exit 3 did not preserve a safe incomplete-source category.' }
  } finally { Set-Item Function:script:Invoke-NetCrateProcess $saved }
 } $source $settings "$active/Notes"
 # A matching tag alone cannot establish completion: validate remote receipt data.

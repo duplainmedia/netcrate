@@ -22,7 +22,7 @@ Tick '2026-02-05T16:00:00Z';Check ((Jobs).Count -eq 1) 'Missed days did not catc
 $record=Get-NetCrateSchedules $settings.StateRoot ([DateTimeOffset]'2026-02-05T16:00:00Z') $zone|Select-Object -First 1
 Check ($record.LastOccurrence -eq '2026-02-05') 'Did not consume latest local date.'
 Tick '2026-02-05T17:00:00Z';Tick '2026-02-03T16:00:00Z';Check ((Jobs).Count -eq 1) 'Replayed consumed occurrence on tick/rollback.'
-$file=Join-Path $settings.StateRoot ('Queue/'+(Jobs)[0].Id+'.json');$job=Read-NetCrateJson $file;$job.SnapshotId='b'*64;$job.BackupCompletedUtc='2026-02-05T16:01:00Z';$job.State='WaitingForProxies';Write-NetCrateJson $file $job
+$file=Join-Path $settings.StateRoot ('Queue/'+(Jobs)[0].Id+'.json');$job=Read-NetCrateJson $file;$job.SnapshotId='b'*64;$job.BackupCompletedUtc='2026-02-05T16:01:00Z';$job.ReceiptConfirmed=$true;$job.State='WaitingForProxies';Write-NetCrateJson $file $job
 $manual=Add-NetCrateBackupQueue $settings.StateRoot $settings $s.Project
 Check ((Jobs).Count -eq 2) 'Media pending prevented a new original.'
 $again=Add-NetCrateBackupQueue $settings.StateRoot $settings $s.Project
@@ -31,7 +31,7 @@ Tick '2026-02-06T16:00:00Z';Check ((Jobs).Count -eq 2) 'Scheduled admission dupl
 $occ=Get-ChildItem (Join-Path $settings.StateRoot 'ScheduleOccurrences') -Filter '*.json'|ForEach-Object {Read-NetCrateJson $_.FullName}|Where-Object {$_.LocalDate -eq '2026-02-06'}
 Check ($occ.JobId -eq [IO.Path]::GetFileNameWithoutExtension($manual)) 'Occurrence did not durably bind to the existing job.'
 # Simulate crash after association, before cursor write; completed job must not be re-enqueued.
-$job=Read-NetCrateJson $manual;$job.State='Ready';$job.SnapshotId='c'*64;$job.BackupCompletedUtc='2026-02-06T16:01:00Z';Write-NetCrateJson $manual $job
+$job=Read-NetCrateJson $manual;$job.State='Ready';$job.ReceiptConfirmed=$true;$job.SnapshotId='c'*64;$job.BackupCompletedUtc='2026-02-06T16:01:00Z';Write-NetCrateJson $manual $job
 $sp=Join-Path $settings.StateRoot ('Schedules/'+$s.Id+'.json');$r=Read-NetCrateJson $sp;$r.LastOccurrence='2026-02-05';Write-NetCrateJson $sp $r
 Tick '2026-02-06T17:00:00Z';Check ((Jobs).Count -eq 2) 'Replayed admission after cursor crash.'
 $edit=Save 'Before' '11:30' '2026-02-06T17:00:00Z';Check ($edit.Id -eq $s.Id -and $edit.Revision -eq 2) 'Edit changed identity or lost revision.'
@@ -75,6 +75,7 @@ Check ([IO.Path]::GetFileNameWithoutExtension($reservedFile) -eq $reservedId) 'M
 # Four processes contend on one installation: manual/manual/schedule/schedule.
 $concurrent=Join-Path $TestRoot 'Concurrent';$p=Join-Path $active 'Concurrent';$null=[IO.Directory]::CreateDirectory($p)
 $cs=$settings.PSObject.Copy();$cs.StateRoot=$concurrent
+$null=New-NetCrateIdentity $concurrent $cs.InstallationId Source
 $null=Save-NetCrateSchedule $concurrent $cs $p '10:00' $true ([DateTimeOffset]'2026-01-01T12:00:00Z') $zone
 Write-NetCrateJson (Join-Path $concurrent 'settings-fixture.json') $cs
 $scriptFile=Join-Path $concurrent 'tick.ps1'
