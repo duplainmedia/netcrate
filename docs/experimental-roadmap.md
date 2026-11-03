@@ -23,6 +23,8 @@ The [preservation documentation](https://github.com/duplainmedia/netcrate/issues
 
 ## Remaining work
 
+[Recovery bootstrap extraction](https://github.com/duplainmedia/netcrate/issues/13) failed under Windows PowerShell 5.1 at a 266-character path during NCS validation of 0.1.1. A shorter-root rerun passed; the product limitation remains unfixed. Reproduce through the actual bootstrap and add long/short-path regressions while preserving archive and permission checks.
+
 [Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
 
 Both accounts must remain signed in. Health checks cover metadata and structure rather than every stored byte. Retention has a finite preview limit and preserves media and unresolved dependencies. Automatic certificate renewal and rotation are not implemented.

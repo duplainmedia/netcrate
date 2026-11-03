@@ -14,3 +14,11 @@ All 53 packaged files matched the executable, source and version documents. The 
 | Combined result summary | `8b83caaf4484a5d6e6b55abdafade9bf80d4212cc9c63312e9742dc3ab22baa4` |
 
 Local commands, tool hashes, outputs and reviews are retained under `build/verification/0.1.1`. The [remaining work](experimental-roadmap.md) includes real-machine acceptance and [maintenance history saturation](https://github.com/duplainmedia/netcrate/issues/10). NetCrate remains experimental.
+
+## NCS validation of merged main
+
+Separate NCS validation reported results for merge commit `0bc86416c642c4377c243d30cb308c20887fd3f5`, version `0.1.1`. Ten desktop groups, package verification, local pairing, folder/media workflows, recovery, interrupted cleanup, reconnect and append-only deletion protection passed. The initial script suite passed 28 of 29 groups. Python passed 19 tests with one inherited skip.
+
+After correcting a missing recovery fixture, the bridge exposed a Windows PowerShell 5.1 bootstrap extraction failure at a 266-character path. Fresh shorter-root recovery and bridge checks passed. [Issue 13](https://github.com/duplainmedia/netcrate/issues/13) tracks the unfixed limitation. These reported results do not validate PR 12.
+
+Source-PC pairing, changed-version backups/restores, physical network/storage interruptions, separate-account recovery, reboot/sign-in, tasks, firewall and cross-session acceptance remain outstanding. Existing backups, credentials and configuration were preserved; no reboot or live firewall/task changes were reported.
