@@ -5,6 +5,10 @@ foreach ($name in @('Configuration', 'Protocol', 'Credentials', 'Process', 'Pair
     Import-Module (Join-Path $PSScriptRoot ('NetCrate.' + $name + '.psm1'))
 }
 
+function Throw-WorkflowFailure([string]$Category, [string]$Message) {
+    $error = [Exception]::new($Message); $error.Data['NetCrateCategory'] = $Category; throw $error
+}
+
 function Invoke-WorkflowRestic($Root, $Settings, [string]$Repository, [string[]]$Arguments, [string]$OutputFile) {
     $secrets = if ($Settings.Role -ceq 'Source') { Unprotect-NetCrateRecord $Root 'paired-secrets' } else { Unprotect-NetCrateRecord $Root 'repositories' }
     $binding = $Settings.Repositories.$Repository
@@ -19,7 +23,8 @@ function Invoke-WorkflowRestic($Root, $Settings, [string]$Repository, [string[]]
     if ($result.ExitCode -ne 0) {
         $null = [IO.Directory]::CreateDirectory([IO.Path]::Combine($Root, 'Logs'))
         [IO.File]::WriteAllText([IO.Path]::Combine($Root, 'Logs', 'storage-error.log'), $result.Diagnostic)
-        throw 'The backup storage is unavailable or the operation did not finish. Existing data was retained for retry.'
+        $category = if ($Arguments[0] -ceq 'backup' -and $result.ExitCode -eq 3) { 'source-incomplete' } else { 'storage-unavailable' }
+        Throw-WorkflowFailure $category 'The backup operation did not finish. Existing data was retained for retry.'
     }
     return $result.Output
 }
@@ -86,7 +91,7 @@ function Assert-WorkflowTree([string]$Path) {
     $null = Assert-NetCrateLocalPath $Path
     $part = [IO.Path]::GetFullPath($Path)
     while ($part) {
-        if (([IO.File]::GetAttributes($part) -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { throw 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
+        if (([IO.File]::GetAttributes($part) -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { Throw-WorkflowFailure 'unsupported-entry' 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
         $part = [IO.Path]::GetDirectoryName($part.TrimEnd('\'))
     }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -95,7 +100,8 @@ function Assert-WorkflowTree([string]$Path) {
         $current = $pending.Pop()
         foreach ($item in [IO.DirectoryInfo]::new($current).EnumerateFileSystemInfos()) {
             # Inspect before descending: do not hydrate cloud placeholders or follow links.
-            if (([long]$item.Attributes -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { throw 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
+            if (([long]$item.Attributes -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { Throw-WorkflowFailure 'unsupported-entry' 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
+            try { $null = Assert-NetCrateRelativePath $item.Name } catch { Throw-WorkflowFailure 'unsupported-name' 'A source entry has an unsupported name.' }
             $null = Assert-NetCrateLocalPath $item.FullName
             if (-not $seen.Add($item.FullName)) { throw 'The folder contains colliding file names.' }
             if ($item -is [IO.DirectoryInfo]) { $pending.Push($item.FullName) }
@@ -144,6 +150,7 @@ function Invoke-NetCrateOriginals {
     param([string]$Root, $Settings, [string]$Project, [string]$Checkpoint, [ValidateSet('Folder','Media')][string]$BackupMode)
     $path = Get-NetCrateBackupPath $Settings $Project $BackupMode
     $status = if ($Checkpoint) { Read-NetCrateJson $Checkpoint } else { [pscustomobject]@{ Id = [guid]::NewGuid().ToString('N'); SnapshotId = ''; BackupCompletedUtc = '' } }
+    if ($Checkpoint -and $status.PSObject.Properties.Name -contains 'BackupMode' -and $status.PSObject.Properties.Name -notcontains 'ReceiptConfirmed' -and ($status.PSObject.Properties.Name -notcontains 'State' -or ($status.State -cnotin @('Ready','WaitingForProxies') -and ($status.PSObject.Properties.Name -notcontains 'RequestId' -or $status.RequestId -cnotmatch '^[a-f0-9]{64}$')))) { $status | Add-Member -NotePropertyName ReceiptConfirmed -NotePropertyValue $false -Force; Write-NetCrateJson $Checkpoint $status }
     if ($status.PSObject.Properties.Name -notcontains 'BackupCompletedUtc') { $status | Add-Member BackupCompletedUtc '' }
     if ($status.PSObject.Properties.Name -notcontains 'BackupMode') { $status | Add-Member BackupMode $BackupMode }
     if ($status.PSObject.Properties.Name -notcontains 'Project') { $status | Add-Member Project $path }
@@ -154,6 +161,7 @@ function Invoke-NetCrateOriginals {
         $extra = @('--tag', 'netcrate-v2-originals')
         if ($BackupMode -ceq 'Media') { $extra += @('--exclude', ($path + '\Proxies\NetCrate'), '--exclude', ($path + '\.office-generated-media')) }
         # Backup-WorkflowPath only returns after exit zero and exactly one full ID.
+        $status | Add-Member -NotePropertyName ReceiptConfirmed -NotePropertyValue $false -Force
         $status.SnapshotId = Backup-WorkflowPath $Root $Settings Primary $path $tag $extra
         $status.BackupCompletedUtc = [DateTime]::UtcNow.ToString('o')
         if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
@@ -163,6 +171,8 @@ function Invoke-NetCrateOriginals {
         if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
     }
     Write-NetCrateBackupReceipt $Root $Settings $status
+    $status | Add-Member -NotePropertyName ReceiptConfirmed -NotePropertyValue $true -Force
+    if ($Checkpoint) { Write-NetCrateJson $Checkpoint $status }
     return $status
 }
 

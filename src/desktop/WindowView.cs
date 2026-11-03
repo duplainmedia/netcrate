@@ -55,7 +55,7 @@ namespace NetCrate {
    object theme=null;try { theme=Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","AppsUseLightTheme",1); } catch {}
    dark=true;
    bg=Theme.Background;card=Theme.Surface;border=Theme.Border;fg=Theme.Text;muted=Theme.Muted;accent=Theme.Accent;
-   window=new Window { Title="NetCrate",Width=1220,Height=740,MinWidth=1050,MinHeight=580,Background=Brush(bg),FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI"),WindowStartupLocation=WindowStartupLocation.CenterScreen };
+   window=new Window { Title="NetCrate " + ((System.Reflection.AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(System.Reflection.Assembly.GetExecutingAssembly(), typeof(System.Reflection.AssemblyInformationalVersionAttribute))).InformationalVersion,Width=1220,Height=740,MinWidth=1050,MinHeight=580,Background=Brush(bg),FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI"),WindowStartupLocation=WindowStartupLocation.CenterScreen };
    try { using(System.Drawing.Icon icon=new System.Drawing.Icon(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"NetCrate.ico"),32,32))window.Icon=Imaging.CreateBitmapSourceFromHIcon(icon.Handle,Int32Rect.Empty,System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions()); } catch {}
    window.SourceInitialized+=delegate { try { int value=dark?1:0;DwmSetWindowAttribute(new WindowInteropHelper(window).Handle,20,ref value,4); } catch {} };
    window.Closing+=delegate(object sender,System.ComponentModel.CancelEventArgs e) { if(!quitting){e.Cancel=true;window.Hide();} };

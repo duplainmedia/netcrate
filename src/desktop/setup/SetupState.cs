@@ -128,8 +128,11 @@ namespace NetCrate.Setup
     public sealed class MaintenanceCheck { public string State { get; set; } public string Code { get; set; } public string LastAttemptUtc { get; set; } public string LastSuccessUtc { get; set; } public string Coverage { get; set; } }
     public sealed class MaintenanceHealth { public MaintenanceCheck Primary { get; set; } public MaintenanceCheck Results { get; set; } }
     public sealed class MaintenanceOperation { public string OperationId { get; set; } public string Action { get; set; } public string State { get; set; } public string CreatedUtc { get; set; } public string Code { get; set; } public string PreviewId { get; set; } }
-    public sealed class MaintenanceItem { public string Project { get; set; } public string BackupCompletedUtc { get; set; } public bool Candidate { get; set; } public string Reason { get; set; } public override string ToString(){return Project+" · "+BackupCompletedUtc+" · "+(Candidate?"Selected for removal":Reason);} }
-    public sealed class MaintenancePreview { public string PreviewId { get; set; } public string ExpiresUtc { get; set; } public int CandidateCount { get; set; } public int EligibleCount { get; set; } public int ProtectedCount { get; set; } public string NewestRetainedUtc { get; set; } public IList<MaintenanceItem> Items { get; set; } }
+    public static class MaintenanceDate {
+        public static string Display(string value) { DateTimeOffset date; if(!DateTimeOffset.TryParse(value,out date)) return String.IsNullOrEmpty(value)?"not available":value; date=date.ToLocalTime(); return date.ToString("g")+" UTC"+date.ToString("zzz"); }
+    }
+    public sealed class MaintenanceItem { public string Project { get; set; } public string BackupCompletedUtc { get; set; } public bool Candidate { get; set; } public string Reason { get; set; } public override string ToString(){return Project+" · "+MaintenanceDate.Display(BackupCompletedUtc)+" · "+(Candidate?"Selected for removal":Reason);} }
+    public sealed class MaintenancePreview { public string Policy { get; set; } public string PreviewId { get; set; } public string ExpiresUtc { get; set; } public int CandidateCount { get; set; } public int EligibleCount { get; set; } public int ProtectedCount { get; set; } public string NewestRetainedUtc { get; set; } public IList<MaintenanceItem> Items { get; set; } }
     public sealed class MaintenanceStatus { public long FreeBytes { get; set; } public bool LowSpace { get; set; } public string StorageCode { get; set; } public MaintenanceHealth Health { get; set; } public IList<MaintenanceOperation> Operations { get; set; } public MaintenancePreview Preview { get; set; } }
     public sealed class SoftwareCheck
     {

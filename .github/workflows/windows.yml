@@ -10,6 +10,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7.0.1
+      - name: Validate version and tag
+        id: version
+        shell: pwsh
+        run: |
+          Import-Module ./install/NetCrate.Version.psm1
+          $version = Get-NetCrateVersion $PWD.Path
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { Assert-NetCrateTag $version $env:GITHUB_REF_NAME }
+          "value=$($version.Product)" >> $env:GITHUB_OUTPUT
       - name: Build and check desktop
         shell: pwsh
         run: ./src/desktop/Build.ps1 -TestRoot $env:RUNNER_TEMP
@@ -21,13 +29,16 @@ jobs:
           ./tests/pairing/Test-Pairing.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Pairing"
           ./tests/installation/Test-Dependencies.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Dependencies"
           ./tests/installation/Test-SetupRepair.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Repair"
+          ./tests/installation/Test-SourceMutex.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SourceMutex"
       - name: Package application
         shell: pwsh
-        run: ./install/Build-Package.ps1
+        run: |
+          ./install/Build-Package.ps1
+          ./tests/installation/Test-Versioning.ps1 -TestRoot $env:RUNNER_TEMP
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: NetCrate-Windows-x64
-          path: build/NetCrate-Windows-x64.zip
+          name: NetCrate-${{ steps.version.outputs.value }}-Windows-x64
+          path: build/NetCrate-${{ steps.version.outputs.value }}-Windows-x64.zip
   media:
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
@@ -39,3 +50,8 @@ jobs:
           Import-Module ./install/NetCrate.Dependencies.psm1
           $tools = Install-NetCrateTools Worker "$env:RUNNER_TEMP/NetCrate-Tools"
           ./tests/installation/Test-Workflow.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Workflow" -ResticExe $tools.Restic -PythonExe $tools.Python -FFmpegExe $tools.FFmpeg -RestServerExe $tools.RestServer
+
+          ./tests/installation/Test-ReceiptRetry.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-ReceiptRetry" -ResticExe $tools.Restic -PythonExe $tools.Python -RestServerExe $tools.RestServer
+          ./tests/installation/Test-OriginalsRestore.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-OriginalsRestore" -ResticExe $tools.Restic
+          $fixture = "$env:RUNNER_TEMP/NC5-" + [guid]::NewGuid().ToString('N').Substring(0,8)
+          ./tests/installation/Test-CleanupRetry.ps1 -TestRoot $fixture -ResticExe $tools.Restic -PythonExe $tools.Python -RestServerExe $tools.RestServer

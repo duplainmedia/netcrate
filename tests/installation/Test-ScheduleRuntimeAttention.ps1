@@ -47,6 +47,10 @@ try {
  WaitMarker 'evaluation-entered' $child
  $status=Read-NetCrateJson $statusFile
  Check ($status.State -eq 'NeedsAttention' -and $status.Code -eq 'schedule-admission') 'Pass start erased prior scheduling attention before reevaluation.'
+ $contenderStart=[Diagnostics.ProcessStartInfo]::new($ps);$contenderStart.UseShellExecute=$false;$contenderStart.CreateNoWindow=$true
+ foreach($arg in @('-NoProfile','-File',"$repo/src/shared/Invoke-NetCrateRuntime.ps1",'-Root',$root,'-Once')){$contenderStart.ArgumentList.Add($arg)}
+ $contender=[Diagnostics.Process]::Start($contenderStart)
+ try {Check ($contender.WaitForExit(10000) -and $contender.ExitCode -eq 0 -and (Read-NetCrateJson $statusFile).ProcessId -eq $child.Id) 'A second source runtime acquired ownership while the first was held.'} finally {if(-not $contender.HasExited){$contender.Kill();$contender.WaitForExit()};$contender.Dispose()}
  [IO.File]::WriteAllText((Join-Path $root 'evaluation-release'),'continue')
  WaitMarker 'backup-entered' $child
  $status=Read-NetCrateJson $statusFile

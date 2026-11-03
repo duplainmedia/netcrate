@@ -92,7 +92,7 @@ namespace NetCrate.Setup
             if (schedule != null) payload = new { Version = 1, InstallationId = state.InstallationId, Role = state.Role.ToString(), BackupMode = state.BackupMode, Folder = state.Folder, Path = schedule.Project, TimeOfDay = schedule.TimeOfDay, Enabled = schedule.Enabled };
             if (maintenance != null) {
                 if (action == "StorageStatus" || action == "CheckStorage") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer" };
-                else if (action == "PreviewRetention" && maintenance.Policy == "KeepAll") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", Policy=maintenance.Policy };
+                else if (action == "PreviewRetention" && (maintenance.Policy == "KeepAll" || maintenance.Policy == "CompleteCleanup")) payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", Policy=maintenance.Policy };
                 else if (action == "PreviewRetention") payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", Policy=maintenance.Policy, Count=maintenance.Count };
                 else payload = new { Version=1, InstallationId=state.InstallationId, Role="BackupServer", PreviewId=maintenance.PreviewId, Confirm=maintenance.Confirm };
             }

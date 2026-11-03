@@ -18,7 +18,10 @@ $null=Native @('init')
 $id=(Native @('cat','config')|ConvertFrom-Json).id
 [IO.File]::WriteAllBytes("$project/nested [a]/café [1].txt",[byte[]](1,2,3,4))
 [IO.File]::WriteAllText("$project/nested [a]/café 1.txt",'sibling')
-[IO.File]::WriteAllText("$project/zero.txt",'')
+$longName=('x'*237)+'.txt'
+[IO.File]::WriteAllText([IO.Path]::Combine($project,$longName),'long bytes')
+[IO.File]::WriteAllText("$project/zero.txt",'short bytes')
+[IO.File]::WriteAllBytes("$project/empty.txt",[byte[]]@())
 [IO.File]::WriteAllBytes("$project/binary.bin",[byte[]](0..255))
 $binaryHash=(Get-FileHash -LiteralPath "$project/binary.bin" -Algorithm SHA256).Hash
 function Backup([string]$Date) {
@@ -76,6 +79,9 @@ $list=Action ListBackups
 Check (@($list.Items).Count -eq 2) 'Receipt snapshots or incomplete originals were visible.'
 Check ($list.Items[0].SnapshotId -ceq $second -and $list.Items[1].SnapshotId -ceq $first) 'Dated versions are not selectable in order.'
 Check ($list.Items[0].Project -ceq $project -and $list.Items[0].SourceComputer -ceq 'OLD-SOURCE') 'Recovery borrowed the current profile or host.'
+$rootChildren=Action ListBackupChildren @{SnapshotId=$first;RelativePath=''}
+Check (@($rootChildren.Items|Where-Object Name -CEQ $longName).Count -eq 1 -and @($rootChildren.Items|Where-Object Name -CEQ 'zero.txt').Count -eq 1) 'Long name or short sibling missing.'
+foreach($name in @($longName,'zero.txt')) { $one=Action RestoreSelection @{SnapshotId=$first;RelativePath=$name;DestinationParent=$dest}; Check ((Get-FileHash -LiteralPath ([IO.Path]::Combine($one.RestoredPath,$name))).Hash -ceq (Get-FileHash -LiteralPath ([IO.Path]::Combine("$TestRoot/Absent source/日本語 [set]",$name))).Hash) 'Restored sibling bytes differ.' }
 $children=Action ListBackupChildren @{SnapshotId=$first;RelativePath='nested [a]'}
 Check (@($children.Items).Count -eq 3 -and @($children.Items|Where-Object Name -CEQ 'café [1].txt').Count -eq 1) 'Immediate literal Unicode children missing.'
 $old=Action RestoreSelection @{SnapshotId=$first;RelativePath='nested [a]/café [1].txt';DestinationParent=$dest}
@@ -90,6 +96,7 @@ Check (([IO.File]::ReadAllBytes("$($new.RestoredPath)/café [1].txt") -join ',')
 Check ([IO.Directory]::Exists("$($new.RestoredPath)/empty")) 'Empty directory lost.'
 [IO.File]::WriteAllText("$($new.RestoredPath)/sentinel",'keep')
 $root=Action RestoreSelection @{SnapshotId=$second;RelativePath='';DestinationParent=$dest}
+Check (([IO.FileInfo]::new("$($root.RestoredPath)/empty.txt")).Length -eq 0) 'Empty file was not preserved.'
 Check ([IO.File]::Exists("$($root.RestoredPath)/zero.txt") -and [IO.Directory]::Exists("$($root.RestoredPath)/nested [a]/empty")) 'Whole root membership differs.'
 Check ((Get-FileHash -LiteralPath "$($root.RestoredPath)/binary.bin" -Algorithm SHA256).Hash -ceq $binaryHash) 'Root restore corrupted NUL or bytes 0..255.'
 $binary=Action RestoreSelection @{SnapshotId=$first;RelativePath='binary.bin';DestinationParent=$dest}

@@ -1,6 +1,8 @@
 param([string]$TestRoot = $env:TEMP)
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+Import-Module (Join-Path $repo 'install/NetCrate.Version.psm1') -Force
+$version = Get-NetCrateVersion $repo
 $output = Join-Path $repo 'build'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -46,9 +48,23 @@ Build-Test 'SetupViewTests' ($viewSources + (Join-Path $repo 'tests\desktop\Setu
 Build-Test 'ScheduleViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'ScheduleView.cs'), (Join-Path $repo 'tests\desktop\ScheduleViewTests.cs'))) @($TestRoot) $references
 Build-Test 'MaintenanceViewTests' (@($state, $service, $store, $inspection, (Join-Path $PSScriptRoot 'setup\WindowsSetupService.cs'), (Join-Path $PSScriptRoot 'MaintenanceView.cs'), (Join-Path $repo 'tests\desktop\MaintenanceViewTests.cs'))) @() $references
 Build-Test 'RestoreViewTests' @($state, (Join-Path $PSScriptRoot 'RestoreView.cs'), (Join-Path $repo 'tests\desktop\RestoreViewTests.cs')) @() $references
+$metadata = Join-Path $output 'NetCrate.Version.cs'
+@"
+using System.Reflection;
+[assembly: AssemblyVersion("$($version.Windows)")]
+[assembly: AssemblyFileVersion("$($version.Windows)")]
+[assembly: AssemblyInformationalVersion("$($version.Product)")]
+"@ | Set-Content -LiteralPath $metadata -Encoding UTF8
+[xml]$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'App.manifest') -Raw
+$identity = $manifest.SelectSingleNode("/*[local-name()='assembly']/*[local-name()='assemblyIdentity']")
+$identity.SetAttribute('version', $version.Windows)
+$generatedManifest = Join-Path $output 'NetCrate.manifest'
+$manifest.Save($generatedManifest)
+$sources += $metadata
 $app = Join-Path $output 'NetCrate.exe'
-& $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$PSScriptRoot\App.manifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources
+& $compiler /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$app" "/win32manifest:$generatedManifest" "/win32icon:$PSScriptRoot\NetCrate.ico" @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'Windows app compilation failed.' }
+foreach ($document in @('VERSION', 'CHANGELOG.md')) { Copy-Item -LiteralPath (Join-Path $repo $document) -Destination $output -Force }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NetCrate.ico') -Destination $output -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Assets\NetCrate-AppIcon.png') -Destination (Join-Path $output 'NetCrate.png') -Force
 New-Item -ItemType Directory -Path (Join-Path $output 'install') -Force | Out-Null

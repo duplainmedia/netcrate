@@ -33,19 +33,22 @@ namespace NetCrate {
     Job job=Get(FromSource(S(queue,"Project"),mode));if(job==null)continue;
     DateTime when=T(queue,"CreatedUtc");
     DateTime completed=T(queue,"BackupCompletedUtc");
-    if(Hex(S(queue,"SnapshotId"))&&(job.BackupCompletedUtc==DateTime.MinValue||completed>job.BackupCompletedUtc)) {job.BackupCompletedUtc=completed;job.SnapshotId=S(queue,"SnapshotId");job.BackupCompleted=true;}
+    bool confirmed=queue.ContainsKey("ReceiptConfirmed")?B(queue,"ReceiptConfirmed"):!queue.ContainsKey("BackupMode")||S(queue,"BackupMode")==""||S(queue,"State")=="Ready"||S(queue,"State")=="WaitingForProxies"||Hex(S(queue,"RequestId"));
+    if(confirmed&&Hex(S(queue,"SnapshotId"))&&(job.BackupCompletedUtc==DateTime.MinValue||completed>job.BackupCompletedUtc)) {job.BackupCompletedUtc=completed;job.SnapshotId=S(queue,"SnapshotId");job.BackupCompleted=true;}
     if(when<job.SourceUtc)continue;
     // Keep a previous successful original when a later attempt fails.
-    bool prior=job.BackupCompleted&&completed==DateTime.MinValue;
+    bool prior=job.BackupCompleted&&(!confirmed||completed==DateTime.MinValue);
     job.SourceUtc=when;job.LastAttemptUtc=when;job.AttemptState=S(queue,"State");job.UpdatedUtc=T(queue,"UpdatedUtc");job.Revision=S(queue,"Id");if(!prior)job.SnapshotId=S(queue,"SnapshotId");
     job.BackupMode=mode;job.MediaState=S(queue,"MediaState");
-    job.BackupCompleted=Hex(job.SnapshotId);job.BackupVerified=false;job.Active=true;job.Attention=false;job.Progress=-1;
+    job.BackupCompleted=prior||confirmed&&Hex(job.SnapshotId);job.BackupVerified=false;job.Active=true;job.Attention=false;job.Progress=-1;
     string state=S(queue,"State");
     job.Phase=state=="BackingUp"?"Backing up":state=="WaitingForProxies"||state=="Ready"?"Waiting for proxies":state=="NeedsAttention"?"Backup needs attention":"Backup queued";
     job.Detail=state=="NeedsAttention"?"Check that the source folder is available and both computers are connected. For storage controls, open Backup storage on the Backup Server.":"Keep both computers on and signed in. NetCrate retries interrupted work automatically.";job.Attention=state=="NeedsAttention";
+    if(!confirmed&&Hex(S(queue,"SnapshotId"))) {job.Phase="Originals written; finalizing backup";job.Active=state!="NeedsAttention";}
+    if(state=="NeedsAttention") {string category=S(queue,"FailureCategory");if(category=="unsupported-name")job.Detail="Rename unsupported file or folder names, then retry.";else if(category=="unsupported-entry")job.Detail="Remove links or make offline and online-only entries fully available locally, then retry.";else if(category=="source-incomplete")job.Detail="Check source folder access and close apps locking files, then retry.";else if(category=="storage-unavailable")job.Detail="Reconnect the backup storage and check the server connection, then retry.";}
     if(mode=="Folder") {
-     job.Active=state=="Queued"||state=="BackingUp";job.BackupCompleted=Hex(job.SnapshotId);
-     if(state=="Ready"&&job.BackupCompleted){job.Phase="Backed up";job.Progress=100;job.Detail="Original files are backed up. Media processing is off.";}
+     job.Active=state=="Queued"||state=="BackingUp";
+     if(state=="Ready"&&confirmed&&job.BackupCompleted){job.Phase="Backed up";job.Progress=100;job.Detail="Original files are backed up. Media processing is off.";}
      continue;
     }
     string requestId=S(queue,"RequestId");if(!Hex(requestId))continue;

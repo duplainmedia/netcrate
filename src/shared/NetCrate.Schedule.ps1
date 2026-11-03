@@ -7,8 +7,8 @@ function Get-NetCrateScheduleLocalZone {
 
 # All queue writers share this short lock. Native backup work runs after release.
 function Invoke-NetCrateAdmissionLock([string]$Root, [scriptblock]$Action) {
-    $key = Get-NetCrateHash ([IO.Path]::GetFullPath($Root).TrimEnd('\').ToUpperInvariant())
-    $mutex = [Threading.Mutex]::new($false, ('Local\NetCrate-Admission-' + $key))
+    $owner = Get-NetCrateOwner $Root
+    $mutex = [Threading.Mutex]::new($false, ('Global\NetCrate-Admission-' + $owner.UserSid + '-' + $owner.InstallationId))
     $owned = $false
     try {
         try { $owned = $mutex.WaitOne(10000) } catch [Threading.AbandonedMutexException] { $owned = $true }

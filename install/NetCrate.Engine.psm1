@@ -123,7 +123,7 @@ function Get-NetCrateFirewallLaunch([string]$Root) {
 function Copy-NetCrateApplication([string]$Source, [string]$Destination) {
     if ([IO.Path]::GetFullPath($Source).TrimEnd('\').Equals([IO.Path]::GetFullPath($Destination).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return }
     $null = [IO.Directory]::CreateDirectory($Destination)
-    foreach ($name in @('NetCrate.exe', 'NetCrate.exe.config', 'NetCrate.ico', 'NetCrate.png', 'THIRD-PARTY.md', 'install', 'src')) {
+    foreach ($name in @('NetCrate.exe', 'NetCrate.exe.config', 'NetCrate.ico', 'NetCrate.png', 'THIRD-PARTY.md', 'VERSION', 'CHANGELOG.md', 'install', 'src')) {
         $from = [IO.Path]::Combine($Source, $name)
         if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination $Destination -Recurse -Force }
     }
