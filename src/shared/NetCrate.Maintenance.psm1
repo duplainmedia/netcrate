@@ -274,8 +274,8 @@ function Get-MaintenanceCleanupPrior($Context,[string]$Id='') {
     $eligible=@(); if([IO.Directory]::Exists($folder)) { foreach($file in [IO.Directory]::EnumerateFiles($folder,'*.json')) {
         $r=Read-NetCrateJson $file -MaximumBytes 32768
         if($r.Action -cne 'ApplyRetention' -or $r.InstallationId -cne $Context.Owner.InstallationId) {continue}
-        if(($r.State -ceq 'Running' -and $r.PSObject.Properties.Name -ccontains 'Step' -and $r.Step -ceq 'ForgetStarted') -or ($r.State -ceq 'NeedsAttention' -and $r.PSObject.Properties.Name -ccontains 'Code' -and $r.Code -ceq 'forget-uncertain')) {throw 'A previous forget is uncertain. Review storage before cleanup.'}
-        if($r.State -ceq 'NeedsAttention' -and $r.PSObject.Properties.Name -ccontains 'Code' -and $r.Code -ceq 'prune-interrupted' -and $r.Step -ceq 'PruneStarted' -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOf' -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOperationId') {
+        if($r.State -cne 'Succeeded' -and $r.PSObject.Properties.Name -ccontains 'Step' -and $r.Step -ceq 'ForgetStarted') {throw 'A previous forget is uncertain. Review storage before cleanup.'}
+        if($r.State -cin @('NeedsAttention','Failed') -and $r.PSObject.Properties.Name -ccontains 'Step' -and $r.Step -cin @('ForgetVerified','PruneStarted') -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOf' -and $r.PSObject.Properties.Name -cnotcontains 'CleanupOperationId') {
             if($r.OperationId -cnotmatch '^[a-f0-9]{32}$' -or [IO.Path]::GetFileNameWithoutExtension($file) -cne $r.OperationId -or $r.PreviewId -cnotmatch '^[a-f0-9]{32}$' -or $r.Confirm -isnot [bool] -or -not $r.Confirm) {throw 'A previous cleanup journal is invalid.'}
             $prior=Read-NetCrateJson ([IO.Path]::Combine($Context.Owner.Root,'Maintenance','Previews',$r.PreviewId+'.json')) -MaximumBytes 262144
             if($prior.Version -ne 1 -or $prior.PreviewId -cne $r.PreviewId -or $prior.Policy -cne 'KeepLatestPerFolder' -or $prior.InstallationId -cne $Context.Owner.InstallationId -or $prior.PrimaryId -cne $Context.Binding.PrimaryId -or $prior.ResultsId -cne $Context.Binding.ResultsId -or $prior.Used -isnot [bool] -or -not $prior.Used -or @($prior.Candidates).Count -eq 0 -or @($prior.Candidates).Count -gt 256 -or @($prior.Candidates|Where-Object {$_ -cnotmatch '^[a-f0-9]{64}$'}).Count) {throw 'The previous forget cannot be verified.'}
@@ -453,7 +453,7 @@ function Invoke-NetCrateMaintenanceRequest {
             $terminal=@(@(foreach($file in $existing){
                 $item=Read-NetCrateJson $file -MaximumBytes 32768
                 if($item.Version -ne 1 -or $item.InstallationId -cne $InstallationId -or $item.OperationId -cnotmatch '^[a-f0-9]{32}$' -or [IO.Path]::GetFileNameWithoutExtension($file) -cne $item.OperationId){throw 'A storage operation record is invalid.'}
-                if($item.State -cin @('Succeeded','Failed','NeedsAttention')){[pscustomobject]@{Path=$file;CreatedUtc=[DateTimeOffset]$item.CreatedUtc}}
+                if($item.State -cin @('Succeeded','Failed','NeedsAttention') -and -not ($item.Action -ceq 'ApplyRetention' -and ($item.State -ceq 'NeedsAttention' -or ($item.State -ceq 'Failed' -and $item.PSObject.Properties.Name -ccontains 'Step' -and $item.Step -cin @('ForgetStarted','ForgetVerified','PruneStarted'))))){[pscustomobject]@{Path=$file;CreatedUtc=[DateTimeOffset]$item.CreatedUtc}}
             })|Sort-Object CreatedUtc)
             $remove=$existing.Count-255
             if($terminal.Count -lt $remove){throw 'Too many storage requests are active. Wait for the Backup Server and try again.'}

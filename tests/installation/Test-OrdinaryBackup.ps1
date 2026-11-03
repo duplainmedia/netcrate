@@ -87,6 +87,27 @@ $workflow=Get-Module NetCrate.Workflow
   if ($bad.State -cne 'NeedsAttention' -or $bad.SnapshotId -or $bad.BackupCompletedUtc -or $bad.FailureCategory -cne 'source-incomplete') { throw 'Restic exit 3 did not preserve a safe incomplete-source category.' }
  } finally { Set-Item Function:script:Invoke-NetCrateProcess $saved }
 } $source $settings "$active/Notes"
+# Failures with unknown origin must never pretend that source files are locked.
+& $workflow {
+ param($root,$settings,$path)
+ $saved=(Get-Command Invoke-NetCrateProcess).ScriptBlock
+ try {
+  function script:Invoke-NetCrateProcess {throw [TimeoutException]::new('private timeout details')}
+  $q=Add-NetCrateBackupQueue $root $settings $path;$j=Read-NetCrateJson $q;$j.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o');Write-NetCrateJson $q $j;Invoke-NetCrateQueue $root $settings
+  $bad=Read-NetCrateJson $q;if($bad.FailureCategory -cne 'unknown' -or [IO.File]::ReadAllText($q).Contains('private timeout details')){throw 'Timeout was not recorded as a neutral safe failure.'}
+ } finally {Set-Item Function:script:Invoke-NetCrateProcess $saved}
+} $source $settings "$active/Notes"
+# Inject a name rejected by the real validator at the source-entry boundary.
+& $workflow {
+ param($root,$settings,$path)
+ $saved=(Get-Command Assert-NetCrateRelativePath).ScriptBlock
+ try {
+  $script:OriginalNameValidator=$saved
+  function script:Assert-NetCrateRelativePath([string]$Path) {if($Path -ceq 'ordinary.txt'){return & $script:OriginalNameValidator 'CON.txt'};return & $script:OriginalNameValidator $Path}
+  $q=Add-NetCrateBackupQueue $root $settings $path;$j=Read-NetCrateJson $q;$j.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o');Write-NetCrateJson $q $j;Invoke-NetCrateQueue $root $settings
+  $bad=Read-NetCrateJson $q;if($bad.FailureCategory -cne 'unsupported-name'){throw 'Rejected source name did not retain the safe category.'}
+ } finally {Set-Item Function:script:Assert-NetCrateRelativePath $saved}
+} $source $settings "$active/Notes"
 # A matching tag alone cannot establish completion: validate remote receipt data.
 $originalStatus=Read-NetCrateJson $queue
 $forged="$TestRoot/forged.json"

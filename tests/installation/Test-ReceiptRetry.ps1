@@ -55,6 +55,16 @@ try {
 } $source $settings
 $failed=Read-NetCrateJson $queue
 Assert ($failed.State -ceq 'NeedsAttention' -and $failed.SnapshotId -cmatch '^[a-f0-9]{64}$' -and $failed.ReceiptConfirmed -eq $false) 'Receipt failure did not retain an unconfirmed original.'
+# Simulate an upgraded v2 job that predates ReceiptConfirmed and a failed retry.
+$failed.PSObject.Properties.Remove('ReceiptConfirmed');$failed.CreatedUtc='2026-11-02T01:00:00Z';$failed.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o');Write-NetCrateJson $queue $failed
+& (Get-Module NetCrate.Workflow) {param($root,$settings) $saved=(Get-Command Write-NetCrateBackupReceipt).ScriptBlock;try {function script:Write-NetCrateBackupReceipt {throw 'private fixture failure'};Invoke-NetCrateQueue $root $settings}finally{Set-Item Function:script:Write-NetCrateBackupReceipt $saved}} $source $settings
+$failed=Read-NetCrateJson $queue
+Assert ($failed.PSObject.Properties.Name -contains 'ReceiptConfirmed' -and $failed.ReceiptConfirmed -eq $false -and $failed.FailureCategory -ceq 'unknown' -and -not [IO.File]::ReadAllText($queue).Contains('private fixture failure')) 'Upgraded failed checkpoint was not marked unconfirmed with neutral failure.'
+# A new day must reserve a new originals read even while the earlier receipt is pending.
+[IO.File]::WriteAllText($file,'Tuesday changed bytes')
+$tuesday=Add-NetCrateBackupQueue $source $settings "$active/Notes" -OccurrenceId 'tuesday' -LocalDate '2026-11-03' -Now ([DateTimeOffset]'2026-11-03T01:00:00Z')
+Assert ($tuesday -cne $queue) 'A later occurrence reused an earlier immutable snapshot.'
+Assert ((Add-NetCrateBackupQueue $source $settings "$active/Notes" -OccurrenceId 'tuesday' -LocalDate '2026-11-03' -Now ([DateTimeOffset]'2026-11-03T01:00:00Z')) -ceq $tuesday) 'Occurrence replay did not retain its own job.'
 $recovery="$TestRoot/recovery.json";$secrets=Get-NetCrateRepositorySecrets $worker
 Write-NetCrateJson $recovery @{Version=1;Kind='netcrate-recovery';InstallationId=('2'*32);CreatedUtc=[DateTime]::UtcNow.ToString('o');Primary=@{Id=$binding.PrimaryId;Path=$binding.PrimaryPath;Password=$secrets.PrimaryPassword};Results=@{Id=$binding.ResultsId;Path=$binding.ResultsPath;Password=$secrets.ResultsPassword};Instructions='fixture'}
 Import-Module "$repo/src/shared/NetCrate.Restore.psm1"
@@ -65,9 +75,18 @@ $failed.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o');Write-NetC
 Invoke-NetCrateQueue $source $settings
 $done=Read-NetCrateJson $queue
 Assert ($done.State -ceq 'Ready' -and $done.ReceiptConfirmed -eq $true -and $done.SnapshotId -ceq $failed.SnapshotId) 'Receipt retry changed the original or failed to confirm it.'
+# An older v2 record can be reconciled positively from its existing valid Primary receipt.
+$reconcile=Read-NetCrateJson $queue;$reconcile.PSObject.Properties.Remove('ReceiptConfirmed');$reconcile.State='NeedsAttention';$reconcile.RetryAfterUtc=[DateTime]::UtcNow.AddSeconds(-1).ToString('o');Write-NetCrateJson $queue $reconcile
+Invoke-NetCrateQueue $source $settings
+$reconciled=Read-NetCrateJson $queue
+Assert ($reconciled.ReceiptConfirmed -eq $true -and $reconciled.SnapshotId -ceq $failed.SnapshotId) 'Existing valid receipt did not reconcile the upgraded checkpoint.'
 $shown=Invoke-NetCrateRestoreAction ListBackups $request "$TestRoot/Fresh" $ResticExe
-Assert (@($shown.Items).Count -eq 1 -and $shown.Items[0].SnapshotId -ceq $failed.SnapshotId) 'Recovery did not expose the same receipted snapshot.'
-Assert (@(Invoke-WorkflowRestic $source $settings Primary @('snapshots','--json','--tag','netcrate-folder-originals')|ConvertFrom-Json).Count -eq 1) 'Receipt retry created duplicate originals.'
+Assert (@($shown.Items).Count -eq 2 -and @($shown.Items|Where-Object SnapshotId -CEQ $failed.SnapshotId).Count -eq 1) 'Recovery did not expose the same receipted snapshot.'
+Assert (@(Invoke-WorkflowRestic $source $settings Primary @('snapshots','--json','--tag','netcrate-folder-originals')|ConvertFrom-Json).Count -eq 2) 'Expected two distinct dated reads.'
+$tuesdayDone=Read-NetCrateJson $tuesday;Assert ($tuesdayDone.SnapshotId -cne $failed.SnapshotId) 'The later job reused the old snapshot.'
+$destination=Join-Path $TestRoot 'RecoveryOutput';$null=[IO.Directory]::CreateDirectory($destination)
+$restored=Invoke-NetCrateRestoreAction RestoreSelection ([pscustomobject]@{RecoveryFile=$recovery;RepositoryPath=$binding.PrimaryPath;SnapshotId=$tuesdayDone.SnapshotId;RelativePath='Proxies/NetCrate/ordinary.txt';DestinationParent=$destination}) "$TestRoot/Fresh" $ResticExe
+Assert ([IO.File]::ReadAllText("$($restored.RestoredPath)/ordinary.txt") -ceq 'Tuesday changed bytes') 'Tuesday restore did not contain the changed bytes.'
 Write-Output 'PASS: receipt fault, hidden recovery point and retry of same native snapshot.'
 
 } finally {if(-not $server.HasExited){$server.Kill($true)};$server.WaitForExit();$server.Dispose()}

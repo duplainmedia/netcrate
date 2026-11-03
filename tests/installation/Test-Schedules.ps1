@@ -72,6 +72,18 @@ $reservedId='d'*64
 Write-NetCrateJson (Join-Path $settings.StateRoot 'ScheduleOccurrences/reserved.json') @{Version=1;OccurrenceId='reserved';LocalDate='2026-12-02';JobId=$reservedId;Project=$reserved}
 $reservedFile=Add-NetCrateBackupQueue $settings.StateRoot $settings $reserved
 Check ([IO.Path]::GetFileNameWithoutExtension($reservedFile) -eq $reservedId) 'Manual admission ignored an interrupted durable scheduled assignment.'
+# A completed originals read awaiting its receipt cannot satisfy a later request.
+$pendingPath=Join-Path $active 'PendingReceipt';$null=[IO.Directory]::CreateDirectory($pendingPath)
+$monday=Add-NetCrateBackupQueue $settings.StateRoot $settings $pendingPath
+$mondayRecord=Read-NetCrateJson $monday;$mondayRecord.SnapshotId='7'*64;$mondayRecord.ReceiptConfirmed=$false;$mondayRecord.State='NeedsAttention';Write-NetCrateJson $monday $mondayRecord
+$tuesday=Add-NetCrateBackupQueue $settings.StateRoot $settings $pendingPath -OccurrenceId 'tuesday-fixture' -LocalDate '2026-11-03'
+Check ($tuesday -cne $monday) 'Later scheduled occurrence reused a prior immutable originals read.'
+Check ((Add-NetCrateBackupQueue $settings.StateRoot $settings $pendingPath -OccurrenceId 'tuesday-fixture' -LocalDate '2026-11-03') -ceq $tuesday) 'Occurrence replay did not retain its assigned job.'
+$manualPath=Join-Path $active 'ManualPendingReceipt';$null=[IO.Directory]::CreateDirectory($manualPath)
+$olderManual=Add-NetCrateBackupQueue $settings.StateRoot $settings $manualPath
+$oldManual=Read-NetCrateJson $olderManual;$oldManual.SnapshotId='8'*64;$oldManual.ReceiptConfirmed=$false;$oldManual.State='NeedsAttention';Write-NetCrateJson $olderManual $oldManual
+$newManual=Add-NetCrateBackupQueue $settings.StateRoot $settings $manualPath
+Check ($newManual -cne $olderManual) 'Later manual request reused a prior immutable originals read.'
 # Four processes contend on one installation: manual/manual/schedule/schedule.
 $concurrent=Join-Path $TestRoot 'Concurrent';$p=Join-Path $active 'Concurrent';$null=[IO.Directory]::CreateDirectory($p)
 $cs=$settings.PSObject.Copy();$cs.StateRoot=$concurrent

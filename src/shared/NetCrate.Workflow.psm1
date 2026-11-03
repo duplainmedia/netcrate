@@ -101,7 +101,7 @@ function Assert-WorkflowTree([string]$Path) {
         foreach ($item in [IO.DirectoryInfo]::new($current).EnumerateFileSystemInfos()) {
             # Inspect before descending: do not hydrate cloud placeholders or follow links.
             if (([long]$item.Attributes -band (0x400 -bor 0x1000 -bor 0x40000 -bor 0x400000)) -ne 0) { Throw-WorkflowFailure 'unsupported-entry' 'Linked, offline or online-only entries are not supported. Make the folder fully available locally first.' }
-            $null = Assert-NetCrateRelativePath $item.Name
+            try { $null = Assert-NetCrateRelativePath $item.Name } catch { Throw-WorkflowFailure 'unsupported-name' 'A source entry has an unsupported name.' }
             $null = Assert-NetCrateLocalPath $item.FullName
             if (-not $seen.Add($item.FullName)) { throw 'The folder contains colliding file names.' }
             if ($item -is [IO.DirectoryInfo]) { $pending.Push($item.FullName) }
@@ -150,6 +150,7 @@ function Invoke-NetCrateOriginals {
     param([string]$Root, $Settings, [string]$Project, [string]$Checkpoint, [ValidateSet('Folder','Media')][string]$BackupMode)
     $path = Get-NetCrateBackupPath $Settings $Project $BackupMode
     $status = if ($Checkpoint) { Read-NetCrateJson $Checkpoint } else { [pscustomobject]@{ Id = [guid]::NewGuid().ToString('N'); SnapshotId = ''; BackupCompletedUtc = '' } }
+    if ($Checkpoint -and $status.PSObject.Properties.Name -contains 'BackupMode' -and $status.PSObject.Properties.Name -notcontains 'ReceiptConfirmed' -and ($status.PSObject.Properties.Name -notcontains 'State' -or ($status.State -cnotin @('Ready','WaitingForProxies') -and ($status.PSObject.Properties.Name -notcontains 'RequestId' -or $status.RequestId -cnotmatch '^[a-f0-9]{64}$')))) { $status | Add-Member -NotePropertyName ReceiptConfirmed -NotePropertyValue $false -Force; Write-NetCrateJson $Checkpoint $status }
     if ($status.PSObject.Properties.Name -notcontains 'BackupCompletedUtc') { $status | Add-Member BackupCompletedUtc '' }
     if ($status.PSObject.Properties.Name -notcontains 'BackupMode') { $status | Add-Member BackupMode $BackupMode }
     if ($status.PSObject.Properties.Name -notcontains 'Project') { $status | Add-Member Project $path }

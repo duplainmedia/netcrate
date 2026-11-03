@@ -21,6 +21,7 @@ $id=(Native @('cat','config')|ConvertFrom-Json).id
 $longName=('x'*237)+'.txt'
 [IO.File]::WriteAllText([IO.Path]::Combine($project,$longName),'long bytes')
 [IO.File]::WriteAllText("$project/zero.txt",'short bytes')
+[IO.File]::WriteAllBytes("$project/empty.txt",[byte[]]@())
 [IO.File]::WriteAllBytes("$project/binary.bin",[byte[]](0..255))
 $binaryHash=(Get-FileHash -LiteralPath "$project/binary.bin" -Algorithm SHA256).Hash
 function Backup([string]$Date) {
@@ -95,6 +96,7 @@ Check (([IO.File]::ReadAllBytes("$($new.RestoredPath)/café [1].txt") -join ',')
 Check ([IO.Directory]::Exists("$($new.RestoredPath)/empty")) 'Empty directory lost.'
 [IO.File]::WriteAllText("$($new.RestoredPath)/sentinel",'keep')
 $root=Action RestoreSelection @{SnapshotId=$second;RelativePath='';DestinationParent=$dest}
+Check (([IO.FileInfo]::new("$($root.RestoredPath)/empty.txt")).Length -eq 0) 'Empty file was not preserved.'
 Check ([IO.File]::Exists("$($root.RestoredPath)/zero.txt") -and [IO.Directory]::Exists("$($root.RestoredPath)/nested [a]/empty")) 'Whole root membership differs.'
 Check ((Get-FileHash -LiteralPath "$($root.RestoredPath)/binary.bin" -Algorithm SHA256).Hash -ceq $binaryHash) 'Root restore corrupted NUL or bytes 0..255.'
 $binary=Action RestoreSelection @{SnapshotId=$first;RelativePath='binary.bin';DestinationParent=$dest}

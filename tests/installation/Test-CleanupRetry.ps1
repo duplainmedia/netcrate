@@ -49,8 +49,28 @@ function Guard {
  return $c
 }
 $context=Guard
+# Force an uncertain forget and an endpoint resume failure without running forget.
+$uncertainPreview=& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'KeepLatestPerFolder' 1} $context
+$uncertain=[pscustomobject]@{Version=1;InstallationId=$id;OperationId=[guid]::NewGuid().ToString('N');Action='ApplyRetention';State='Queued';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o');PreviewId=$uncertainPreview.PreviewId;Confirm=$true}
+$null=[IO.Directory]::CreateDirectory("$root/Maintenance/Requests");$uncertainFile="$root/Maintenance/Requests/$($uncertain.OperationId).json";Write-NetCrateJson $uncertainFile $uncertain
+& (Get-Module NetCrate.Maintenance) {
+ param($c,$expected)
+ $script:SavedUncertain=(Get-Command Invoke-NetCrateProcess).ScriptBlock;$script:UncertainRepo=$c.Binding.PrimaryPath;$script:UncertainIds=@($expected);$script:Faulted=$false
+ try {
+  function script:Invoke-NetCrateProcess {
+   param([string]$FilePath,[string[]]$Arguments,[hashtable]$Environment,[int]$TimeoutSeconds,[string]$OutputFile,[string]$InputText)
+   if($Arguments -ccontains 'forget') {if($Arguments[0] -cne '--repo' -or $Arguments[1] -cne $script:UncertainRepo -or $Arguments[2] -cne '--no-cache' -or $Arguments[3] -cne 'forget' -or ((@($Arguments|Select-Object -Skip 4)|Sort-Object) -join ',') -cne (($script:UncertainIds|Sort-Object) -join ',')){throw 'Unexpected uncertain fixture target.'};$script:Faulted=$true;return [pscustomobject]@{ExitCode=1;Output='';Diagnostic='private'}}
+   return & $script:SavedUncertain @PSBoundParameters
+  }
+  Invoke-NetCrateMaintenancePass $c.Owner.Root $c.Owner.InstallationId {} {throw 'endpoint fault'}
+  if(-not $script:Faulted){throw 'Uncertain fixture did not reach forget.'}
+ } finally {Set-Item Function:script:Invoke-NetCrateProcess $script:SavedUncertain}
+} $context $uncertainPreview.Candidates
+$uncertain=Read-NetCrateJson $uncertainFile
+if($uncertain.Step -cne 'ForgetStarted' -or $uncertain.Code -cne 'endpoint-restart'){throw 'Endpoint failure did not preserve uncertain forget stage.'}
+# Keep this unresolved journal alongside the verified operation to test cross-journal blocking.
 $preview=& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'KeepLatestPerFolder' 1} $context
-$op=[pscustomobject]@{Version=1;InstallationId=$id;OperationId=[guid]::NewGuid().ToString('N');Action='ApplyRetention';State='Running';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o');PreviewId=$preview.PreviewId;Confirm=$true}
+$op=[pscustomobject]@{Version=1;InstallationId=$id;OperationId=[guid]::NewGuid().ToString('N');Action='ApplyRetention';State='Queued';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o');PreviewId=$preview.PreviewId;Confirm=$true}
 $null=[IO.Directory]::CreateDirectory("$root/Maintenance/Requests");$opFile="$root/Maintenance/Requests/$($op.OperationId).json";Write-NetCrateJson $opFile $op
 & (Get-Module NetCrate.Maintenance) {
  param($c,$o,$f,$ids)
@@ -65,20 +85,37 @@ $null=[IO.Directory]::CreateDirectory("$root/Maintenance/Requests");$opFile="$ro
    elseif($Arguments.Count -gt 3 -and $Arguments[3] -ceq 'prune') {if($Arguments.Count -ne 4){throw 'Unexpected prune arguments.'};$script:PruneBlocked=$true;return [pscustomobject]@{ExitCode=1;Output='';Diagnostic='private'}}
    return & $script:SavedRunner @PSBoundParameters
   }
-  try {Invoke-MaintenanceApply $c $o $f;throw 'Fault did not fire.'}catch {if(-not $script:PruneBlocked){throw}}
+  Invoke-NetCrateMaintenancePass $c.Owner.Root $c.Owner.InstallationId {} {throw 'endpoint fault'}
+  if(-not $script:PruneBlocked){throw 'Prune fault did not fire.'}
  } finally {Set-Item Function:script:Invoke-NetCrateProcess $saved}
 } $context $op $opFile $preview.Candidates
 $prior=Read-NetCrateJson $opFile
-if($prior.State -cne 'NeedsAttention' -or $prior.Code -cne 'prune-interrupted'){throw 'Verified forget did not journal interrupted prune.'}
+if($prior.State -cne 'NeedsAttention' -or $prior.Code -cne 'endpoint-restart' -or $prior.Step -cne 'PruneStarted'){throw 'Endpoint failure did not preserve verified forget stage.'}
+$blocked=$false;try{& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'CompleteCleanup' 0} $context}catch{$blocked=$true};if(-not $blocked){throw 'Another ambiguous forget did not block cleanup.'}
+$uncertain.State='Succeeded';$uncertain.Step='Completed';Write-NetCrateJson $uncertainFile $uncertain
+# History trimming must not erase the only unresolved verified-forget journal.
+$prior.CreatedUtc='2000-01-01T00:00:00Z';Write-NetCrateJson $opFile $prior
+$requestDir="$root/Maintenance/Requests";$historyPaths=[Collections.Generic.List[string]]::new();$needed=256-@([IO.Directory]::GetFiles($requestDir,'*.json')).Count
+for($i=0;$i -lt $needed;$i++){ $historyId=[guid]::NewGuid().ToString('N');$historyPath=[IO.Path]::Combine($requestDir,$historyId+'.json');$historyPaths.Add($historyPath);Write-NetCrateJson $historyPath @{Version=1;InstallationId=$id;OperationId=$historyId;Action='CheckStorage';State='Succeeded';CreatedUtc='2025-01-01T00:00:00Z'} }
+$queuedHistory=Invoke-NetCrateMaintenanceRequest $root $id CheckStorage @{};$historyPaths.Add([IO.Path]::Combine($requestDir,$queuedHistory.OperationId+'.json'))
+if(-not [IO.File]::Exists($opFile)){throw 'History trimming erased an unresolved verified-forget journal.'}
+# Remove only generated fixture history by identity, preserving original journals.
+$null=Guard;foreach($entry in $historyPaths){if([IO.File]::Exists($entry)){$h=Read-NetCrateJson $entry;if([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($entry)) -cne [IO.Path]::GetFullPath($requestDir) -or $h.Action -cne 'CheckStorage' -or $h.InstallationId -cne $id -or [IO.Path]::GetFileNameWithoutExtension($entry) -cne $h.OperationId){throw 'Fixture history target mismatch.'};[IO.File]::Delete($entry)}}
 $context=Guard
 $remaining=& (Get-Module NetCrate.Maintenance) {param($c) Get-MaintenanceInventory $c 1} $context
 if(@($remaining.Candidates).Count -ne 0){throw 'Fixture still has a new removal candidate.'}
 $expectedHash=(Get-FileHash -LiteralPath "$full/Source/Child/version.txt" -Algorithm SHA256).Hash
+foreach($stage in @('PruneStarted','ForgetVerified')) {foreach($code in @('interrupted','endpoint-restart')) {
+ $prior.Step=$stage;$prior.Code=$code;Write-NetCrateJson $opFile $prior
+ $legacyPreview=& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'CompleteCleanup' 0} $context
+ if($legacyPreview.PriorOperationId -cne $prior.OperationId){throw 'Verified old journal was not eligible independently of display code.'}
+}}
+$prior.Step='PruneStarted';$prior.Code='prune-interrupted';Write-NetCrateJson $opFile $prior
 $cleanup=& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'CompleteCleanup' 0} $context
 if(@($cleanup.Candidates).Count -ne 0 -or $cleanup.PriorOperationId -cne $prior.OperationId){throw 'Cleanup preview did not bind the previous forget.'}
-$prior.Code='forget-uncertain';Write-NetCrateJson $opFile $prior
+$prior.Step='ForgetStarted';$prior.Code='endpoint-restart';Write-NetCrateJson $opFile $prior
 $ambiguous=$false;try{& (Get-Module NetCrate.Maintenance) {param($c) New-MaintenancePreview $c 'CompleteCleanup' 0} $context}catch{$ambiguous=$true};if(-not $ambiguous){throw 'An ambiguous forget was accepted for cleanup.'}
-$prior.Code='prune-interrupted';Write-NetCrateJson $opFile $prior
+$prior.Step='PruneStarted';$prior.Code='prune-interrupted';Write-NetCrateJson $opFile $prior
 $previewFile="$root/Maintenance/Previews/$($cleanup.PreviewId).json";$tampered=Read-NetCrateJson $previewFile;$tampered.Fingerprint='0'*64;Write-NetCrateJson $previewFile $tampered
 $stale=$false;try{& (Get-Module NetCrate.Maintenance) {param($c,$p) Test-MaintenancePreview $c $p ([DateTimeOffset]::UtcNow)} $context $cleanup.PreviewId}catch{$stale=$true};if(-not $stale){throw 'A stale cleanup preview was accepted.'};Write-NetCrateJson $previewFile $cleanup
 $retry=[pscustomobject]@{Version=1;InstallationId=$id;OperationId=[guid]::NewGuid().ToString('N');Action='ApplyRetention';State='Queued';CreatedUtc=[DateTimeOffset]::UtcNow.ToString('o');PreviewId=$cleanup.PreviewId;Confirm=$true}

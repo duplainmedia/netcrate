@@ -33,7 +33,7 @@ namespace NetCrate {
     Job job=Get(FromSource(S(queue,"Project"),mode));if(job==null)continue;
     DateTime when=T(queue,"CreatedUtc");
     DateTime completed=T(queue,"BackupCompletedUtc");
-    bool confirmed=!queue.ContainsKey("ReceiptConfirmed")||B(queue,"ReceiptConfirmed");
+    bool confirmed=queue.ContainsKey("ReceiptConfirmed")?B(queue,"ReceiptConfirmed"):!queue.ContainsKey("BackupMode")||S(queue,"BackupMode")==""||S(queue,"State")=="Ready"||S(queue,"State")=="WaitingForProxies"||Hex(S(queue,"RequestId"));
     if(confirmed&&Hex(S(queue,"SnapshotId"))&&(job.BackupCompletedUtc==DateTime.MinValue||completed>job.BackupCompletedUtc)) {job.BackupCompletedUtc=completed;job.SnapshotId=S(queue,"SnapshotId");job.BackupCompleted=true;}
     if(when<job.SourceUtc)continue;
     // Keep a previous successful original when a later attempt fails.
@@ -45,7 +45,7 @@ namespace NetCrate {
     job.Phase=state=="BackingUp"?"Backing up":state=="WaitingForProxies"||state=="Ready"?"Waiting for proxies":state=="NeedsAttention"?"Backup needs attention":"Backup queued";
     job.Detail=state=="NeedsAttention"?"Check that the source folder is available and both computers are connected. For storage controls, open Backup storage on the Backup Server.":"Keep both computers on and signed in. NetCrate retries interrupted work automatically.";job.Attention=state=="NeedsAttention";
     if(!confirmed&&Hex(S(queue,"SnapshotId"))) {job.Phase="Originals written; finalizing backup";job.Active=state!="NeedsAttention";}
-    if(state=="NeedsAttention") {string category=S(queue,"FailureCategory");if(category=="unsupported-entry")job.Detail="Remove links or make offline and online-only entries fully available locally, then retry.";else if(category=="source-incomplete")job.Detail="Check source folder access and close apps locking files, then retry.";else if(category=="storage-unavailable")job.Detail="Reconnect the backup storage and check the server connection, then retry.";}
+    if(state=="NeedsAttention") {string category=S(queue,"FailureCategory");if(category=="unsupported-name")job.Detail="Rename unsupported file or folder names, then retry.";else if(category=="unsupported-entry")job.Detail="Remove links or make offline and online-only entries fully available locally, then retry.";else if(category=="source-incomplete")job.Detail="Check source folder access and close apps locking files, then retry.";else if(category=="storage-unavailable")job.Detail="Reconnect the backup storage and check the server connection, then retry.";}
     if(mode=="Folder") {
      job.Active=state=="Queued"||state=="BackingUp";
      if(state=="Ready"&&confirmed&&job.BackupCompleted){job.Phase="Backed up";job.Progress=100;job.Detail="Original files are backed up. Media processing is off.";}
