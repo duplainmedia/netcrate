@@ -12,8 +12,6 @@ For video projects, NetCrate backs up the originals, generates proxies and conta
 
 For someone with spare hardware and a suitable second location, it can be an affordable, self-hosted alternative to paying for cloud backup storage, with the added benefit of offloading proxy encoding.
 
-I built it because it makes my own workflow easier. I’m sharing it because it might help another independent filmmaker or small production team put equipment they already own to work.
-
 ## Development status
 
 This branch includes a Windows setup wizard for an Editing Computer and a Backup Server. New setup defaults to ordinary folder backups, with optional media processing for video projects. It installs verified tools, creates encrypted backup storage, saves recovery details, connects the computers and verifies a generated sample.
