@@ -22,6 +22,10 @@ The guided workflow has been tested with disposable repositories and generated f
 
 See [setting up both computers](docs/setup.md) for the user workflow and [development and verification](docs/development.md) for build instructions. There is no public release download yet.
 
+## Versioning
+
+NetCrate uses [Semantic Versioning](https://semver.org/) with three numeric components; 0.x builds are experimental. See the [changelog](CHANGELOG.md) for unreleased changes. On release, notes move to a dated version entry and may be reused in GitHub Releases. Release tags use `v` followed by the version. Windows metadata adds `.0`; each component is limited to 65534.
+
 ## License
 
 NetCrate's original code is licensed under the [MIT License](LICENSE). Third-party software retains its own licenses.
