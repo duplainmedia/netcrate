@@ -35,7 +35,7 @@ function Invoke-RestoreNative($Context,[string[]]$Arguments) {
     $timeout=Get-RestoreNativeTimeout $Context $Arguments
     try { $r=Invoke-NetCrateProcess $Context.Restic (@('--repo',$Context.Repository,'--no-cache','--no-lock')+$Context.Options+$Arguments) $Context.Environment -TimeoutSeconds $timeout }
     catch {
-        if((Get-RestoreField $Context BrowseDeadlineUtc) -and $_.Exception.Message -match 'timed out') {
+        if($Arguments -cnotcontains '--target' -and $_.Exception.Message -match 'timed out') {
             throw 'Reading the backup took too long. Reconnect the drive or private connection, then choose Refresh. You can cancel browsing and try again later.'
         }
         throw
@@ -136,7 +136,11 @@ function Get-RestoreBackups($Context,[string]$SnapshotId='', [int]$Offset=0) {
                     $rs.tags -cnotcontains 'netcrate-backup-receipt' -or $rs.tags -ccontains 'netcrate-v2-originals' -or $rs.tags -ccontains 'netcrate-originals' -or $rs.tags -ccontains 'netcrate-folder-originals'){continue}
                 $rp=Get-RestoreSelector (Convert-RestoreProject $rs.paths[0])
                 if(-not $rp.EndsWith('/BackupReceipts/'+$s.id+'.json',[StringComparison]::Ordinal)){continue}
-                $wire=Invoke-RestoreNative $Context @('dump',$rs.id,$rp)
+            } catch { $null=Get-RestoreNativeTimeout $Context @('cat','config'); continue }
+            # A read failure is operational, not evidence that this receipt is invalid.
+            # Keep native access outside both metadata/payload validation catches.
+            $wire=Invoke-RestoreNative $Context @('dump',$rs.id,$rp)
+            try {
                 if([Text.Encoding]::UTF8.GetByteCount($wire) -gt 16384){continue}
                 $doc=[System.Text.Json.JsonDocument]::Parse($wire);try { $names=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase); foreach($property in $doc.RootElement.EnumerateObject()){if(-not $names.Add($property.Name)){throw 'The completion receipt contains duplicate fields.'}} }finally{$doc.Dispose()}
                 $r=$wire|ConvertFrom-Json
