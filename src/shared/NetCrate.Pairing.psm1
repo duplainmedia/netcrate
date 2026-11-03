@@ -177,7 +177,7 @@ function New-NetCratePairingReply {
 }
 
 function Import-NetCratePairingReply {
-    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Reply, [DateTime]$Now = [DateTime]::UtcNow)
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Reply, [DateTime]$Now = [DateTime]::UtcNow, [scriptblock]$ValidatePayload)
     $owner = Get-NetCrateOwner $Root
     $pending = Unprotect-NetCrateRecord $Root 'outbound-request'
     $fieldCount = if ($pending.Request.Version -eq 2) { 17 } else { 15 }
@@ -209,6 +209,7 @@ function Import-NetCratePairingReply {
             $capability = Get-NetCrateBackupMode ([pscustomobject]@{ BackupMode = $Reply.ServerBackupMode })
             if ($payload.BackupMode -cne $requested -or $Reply.BackupMode -cne $requested -or $payload.ServerBackupMode -cne $capability -or ($requested -ceq 'Media' -and $capability -ceq 'Folder')) { throw 'The encrypted backup mode differs from the requested capability.' }
         }
+        if($ValidatePayload){$null=& $ValidatePayload $payload $pending.Request $Reply}
         Protect-NetCrateRecord $Root 'pending-reply' @{ Payload = $payload; Reply = $Reply; Confirmed = $false }
         return [pscustomobject]@{ ConnectionCode = $code; ServerId = $Reply.ServerId; WorkerComputer = $payload.WorkerComputer }
     } finally {
@@ -221,7 +222,6 @@ function Confirm-NetCratePairingReply {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$ConnectionCode)
     $pending = Unprotect-NetCrateRecord $Root 'pending-reply'
     $request = Unprotect-NetCrateRecord $Root 'outbound-request'
-    Test-PairingExpiry $pending.Reply ([DateTime]::UtcNow)
     if ($pending.Reply.RequestId -cne $request.Request.RequestId -or $pending.Reply.ConnectionCode -cne $ConnectionCode) {
         throw 'Compare the current connection codes on both computers.'
     }
@@ -230,6 +230,9 @@ function Confirm-NetCratePairingReply {
         if ($established.Reply.Signature -cne $pending.Reply.Signature) { throw 'The confirmed pairing differs from this reply.' }
         return [pscustomobject]@{ ServerId = $pending.Reply.ServerId; RequestId = $pending.Reply.RequestId }
     }
+    $now=[datetime]::UtcNow
+    Test-PairingExpiry $request.Request $now
+    Test-PairingExpiry $pending.Reply $now
     Protect-NetCrateRecord $Root 'paired-secrets' $pending.Payload
     Protect-NetCrateRecord $Root 'paired-peer' @{ Reply = $pending.Reply; Request = $request.Request }
     $request.Consumed = $true
