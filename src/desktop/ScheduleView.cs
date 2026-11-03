@@ -22,16 +22,17 @@ namespace NetCrate {
   bool messageIsError;
   public ScheduleEditor(IScheduleService service){this.service=service;Items=new List<ScheduleItem>();Message="";}
   internal void RecordFailure(){Message="The schedule could not be read or saved. Check the folder and try again.";messageIsError=true;}
-  async Task Run(string action,ScheduleRequest request,CancellationToken token,bool preserveMessage=false){
+  async Task<bool> Run(string action,ScheduleRequest request,CancellationToken token,bool preserveMessage=false){
    SetupResult result;
-   try{result=await service.InvokeScheduleAsync(action,request,token);}catch(Exception){RecordFailure();return;}
-   if(!result.Succeeded){Message=result.Message;messageIsError=true;return;}
+   try{result=await service.InvokeScheduleAsync(action,request,token);}catch(Exception){RecordFailure();return false;}
+   if(!result.Succeeded){Message=result.Message;messageIsError=true;return false;}
    Items=result.Schedules;
    if(!preserveMessage||!messageIsError){Message=Items.Count==0?"No automatic backups yet. Choose a folder and a daily local time.":result.Message;messageIsError=false;}
+   return true;
   }
-  public Task RefreshAsync(CancellationToken token,bool preserveMessage=false){return Run("ListSchedules",new ScheduleRequest(),token,preserveMessage);}
-  public Task SaveAsync(string project,string time,bool enabled,CancellationToken token){return Run("SaveSchedule",new ScheduleRequest{Project=project,TimeOfDay=time,Enabled=enabled},token);}
-  public Task DisableAsync(ScheduleItem item,CancellationToken token){return Run("DisableSchedule",new ScheduleRequest{Project=item.Project},token);}
+  public Task<bool> RefreshAsync(CancellationToken token,bool preserveMessage=false){return Run("ListSchedules",new ScheduleRequest(),token,preserveMessage);}
+  public Task<bool> SaveAsync(string project,string time,bool enabled,CancellationToken token){return Run("SaveSchedule",new ScheduleRequest{Project=project,TimeOfDay=time,Enabled=enabled},token);}
+  public Task<bool> DisableAsync(ScheduleItem item,CancellationToken token){return Run("DisableSchedule",new ScheduleRequest{Project=item.Project},token);}
  }
  public sealed class ScheduleView : Window {
   readonly ScheduleEditor editor;readonly Func<string> chooseFolder;
@@ -62,6 +63,6 @@ namespace NetCrate {
    if(!preserveInput&&list.SelectedItem!=null)SetFields((ScheduleItem)list.SelectedItem);status.Text=editor.Message;
   }
   internal Task RefreshStatusAsync(){return Run(()=>editor.RefreshAsync(CancellationToken.None,true),true);}
-  async Task Run(Func<Task> action,bool preserveInput=false){if(busy)return;busy=true;commands.IsEnabled=false;try{await action();Render(preserveInput);}catch(Exception){editor.RecordFailure();status.Text=editor.Message;}finally{busy=false;commands.IsEnabled=true;}}
+  async Task Run(Func<Task<bool>> action,bool preserveInput=false){if(busy)return;busy=true;commands.IsEnabled=false;try{bool succeeded=await action();Render(preserveInput||!succeeded);}catch(Exception){editor.RecordFailure();status.Text=editor.Message;}finally{busy=false;commands.IsEnabled=true;}}
  }
 }

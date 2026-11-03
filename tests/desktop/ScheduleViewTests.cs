@@ -46,6 +46,23 @@ class ScheduleViewTests {
   service.ThrowAction="ListSchedules";view.RefreshStatusAsync().GetAwaiter().GetResult();string refreshError=editor.Message;
   Check(refreshError.Contains("could not")&&!refreshError.Contains("private fixture"),"Thrown timer refresh error was not retained safely.");
   service.ThrowAction=null;view.RefreshStatusAsync().GetAwaiter().GetResult();Check(editor.Message==refreshError,"Following timer refresh erased its previous exception error.");
+  CheckBox enabled=Find<CheckBox>(view)[0];var inputFailures=new List<string>();
+  foreach(string action in new[]{"SaveSchedule","ListSchedules"})foreach(bool thrown in new[]{true,false}){
+   service.Fail=false;service.ThrowAction=null;editor.SaveAsync("C:\\Files\\日本語","09:15",true,CancellationToken.None).GetAwaiter().GetResult();view.RefreshStatusAsync().GetAwaiter().GetResult();
+   list.SelectedItem=null;list.SelectedItem=editor.Items[0];daily.Text="12:34";enabled.IsChecked=false;
+   service.Fail=!thrown;service.ThrowAction=thrown?action:null;
+   string command=action=="SaveSchedule"?"Save schedule":"Refresh",label=(thrown?"Thrown ":"Returned ")+action;
+   Find<Button>(view).Find(b=>AutomationProperties.GetName(b)==command).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+   string error=editor.Message;
+   n++;if(daily.Text!="12:34"||enabled.IsChecked!=false||list.SelectedItem==null)inputFailures.Add(label+" failure discarded unsaved time, enabled choice or selection.");
+   service.Fail=false;service.ThrowAction=null;view.RefreshStatusAsync().GetAwaiter().GetResult();
+   n++;if(daily.Text!="12:34"||enabled.IsChecked!=false||editor.Message!=error)inputFailures.Add(label+" failure lost inputs or error after background refresh.");
+   // A deliberate subsequent Save can reconcile the stored values and clear the error.
+   daily.Text="12:34";enabled.IsChecked=false;
+   Find<Button>(view).Find(b=>AutomationProperties.GetName(b)=="Save schedule").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+   Check(service.Last.TimeOfDay=="12:34"&&!service.Last.Enabled&&editor.Items[0].TimeOfDay=="12:34"&&!editor.Items[0].Enabled&&editor.Message=="Saved.",label+" was not recoverable through a successful explicit Save.");
+  }
+  if(inputFailures.Count>0)throw new Exception(String.Join(" | ",inputFailures));
   view.Close();app.Shutdown();
   if(args.Length>0){
    string root=Path.Combine(args[0],"schedule-native-"+Guid.NewGuid().ToString("N")),engine=Path.Combine(root,"Bridge"),setup=Path.Combine(root,"Setup");Directory.CreateDirectory(engine);
