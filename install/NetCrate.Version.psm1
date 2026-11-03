@@ -9,7 +9,7 @@ function Get-NetCrateVersion([string]$Root) {
     [pscustomobject]@{ Product = $value; Windows = "$value.0" }
 }
 function Assert-NetCrateTag($Version, [string]$Tag) {
-    if ($Tag -cne ('v' + $Version.Product)) { throw "Tag $Tag does not match VERSION $($Version.Product)." }
+    if (-not [String]::Equals($Tag, ('v' + $Version.Product), [StringComparison]::Ordinal)) { throw "Tag $Tag does not match VERSION $($Version.Product)." }
 }
 function Get-NetCrateManifestVersion([string]$Path) {
     if (-not ('NetCrateVersionResource' -as [type])) {
@@ -45,6 +45,6 @@ function Assert-NetCrateExecutable([string]$Path, $Version) {
     $assembly = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($full))
     $info = $assembly.GetCustomAttributes([Reflection.AssemblyInformationalVersionAttribute], $false)
     $file = [Diagnostics.FileVersionInfo]::GetVersionInfo($full)
-    if ($assembly.GetName().Version.ToString() -cne $Version.Windows -or $file.FileVersion -cne $Version.Windows -or $info.Count -ne 1 -or $info[0].InformationalVersion -cne $Version.Product -or (Get-NetCrateManifestVersion $full) -cne $Version.Windows) { throw 'Executable version metadata does not match VERSION; rebuild before packaging.' }
+    if (-not [String]::Equals($assembly.GetName().Version.ToString(), $Version.Windows, [StringComparison]::Ordinal) -or -not [String]::Equals($file.FileVersion, $Version.Windows, [StringComparison]::Ordinal) -or $info.Count -ne 1 -or -not [String]::Equals($info[0].InformationalVersion, $Version.Product, [StringComparison]::Ordinal) -or -not [String]::Equals((Get-NetCrateManifestVersion $full), $Version.Windows, [StringComparison]::Ordinal)) { throw 'Executable version metadata does not match VERSION; rebuild before packaging.' }
 }
 Export-ModuleMember -Function Get-NetCrateVersion, Assert-NetCrateTag, Get-NetCrateManifestVersion, Assert-NetCrateExecutable
