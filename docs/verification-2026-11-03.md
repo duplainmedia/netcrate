@@ -1,5 +1,7 @@
 # Everyday backup verification
 
+This record describes the original experimental snapshot. See [0.1.1 verification](verification-0.1.1.md) for the follow-up results.
+
 The final whole-branch review identified five unresolved integration issues despite the passing checks below. They affect recovery names, premature completion reporting, interrupted cleanup, cross-session admission and actionable error reporting. This is an experimental source snapshot, not a dependable backup release. The [known issues and prioritized follow-up plan](experimental-roadmap.md) describe the remaining work. Passing covered scenarios must not be read as a clean final review.
 
 The private Windows build implements ordinary folder backups, optional media processing, selective recovery, daily schedules, storage checks and deliberate server-side retention. The implementation stays on `codex/everyday-backups`, based on `release-preparation` at `f50962a0c925f76519f66c54fe8dbc1f8aac81ff`. Each implementation task received an independent review and scoped fixes before completion.

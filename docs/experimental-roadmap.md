@@ -19,6 +19,6 @@ The [preservation documentation](https://github.com/duplainmedia/netcrate/issues
 
 [Maintenance history saturation](https://github.com/duplainmedia/netcrate/issues/10) is a non-blocking follow-up. After 256 retained failures, even attempts that never began deletion can prevent new maintenance requests. Safe history retirement needs regression coverage while preserving ambiguous and unfinished destructive operations.
 
-Complete combined native verification and package checks before merging this repair. Then test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
+[Combined verification](verification-0.1.1.md) passed all 32 groups and the package checks. Next, test the source computer and NCS Tower with disposable data, covering separate accounts, setup/elevation, reboot/sign-in, disconnected storage, network changes, interruption and independent recovery. Record actual results before recommending important-file use.
 
 Both accounts must remain signed in. Health checks cover metadata and structure rather than every stored byte. Retention has a finite preview limit and preserves media and unresolved dependencies. Automatic certificate renewal and rotation are not implemented.

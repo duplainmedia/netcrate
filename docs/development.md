@@ -10,6 +10,8 @@ The build runs desktop model, setup controller, persistence, folder, timeout and
 
 Normal users follow [setup](setup.md). They do not run development commands or edit configuration files.
 
+`VERSION` drives generated application metadata and versioned ZIP names. Packaging rejects stale metadata, including the embedded manifest. Run `tests/installation/Test-Versioning.ps1` after building. Keep changes in the public [changelog](../CHANGELOG.md) under Unreleased until a dated release is published; its immutable tag must match `v` plus `VERSION`. Application version bumps do not change protocol or stored-data versions.
+
 ## Runtime
 
 The app stores its owned engine under `%LOCALAPPDATA%\NetCrate\Engine`. It keeps a separate installation identity, current-user DPAPI records, pinned tool distributions, repository bindings and durable job state. The two repositories have independently generated passwords. The backup endpoint uses TLS 1.3, bcrypt authentication, private repositories and append-only access. A scoped Windows Firewall rule permits the paired editing address only.
