@@ -80,7 +80,7 @@ namespace NetCrate.Setup
         public void RecordRecoveryDelivery(string path) {
             RequireIdle();
             if (!State.Prepared || State.Role != ComputerRole.BackupServer) throw new InvalidOperationException("Prepare the Backup Server first.");
-            State.RecoveryExported = true; State.RecoverySavedPath = path; State.RecoveryLocalOnly = false; State.RecoveryConfirmed = false; Notify(true);
+            State.RecoveryExported = true; if (!String.IsNullOrEmpty(path)) State.RecoverySavedPath = path; State.RecoveryLocalOnly = false; State.RecoveryConfirmed = false; Notify(true);
         }
         public void ContinueWithLocalRecovery() {
             RequireIdle();
@@ -264,10 +264,19 @@ namespace NetCrate.Setup
             RequireIdle();
             RequireConnectionStep();
             State.Connected = false;
-            PairingCode = ""; PairingStage = "";
             // Importing a file is not a successful network check.
             await RunAsync(() => service.ImportConnectionAsync(State.Copy(), path, token), token);
             Notify(true);
+        }
+
+        public async Task HydrateManualPairingAsync(CancellationToken token) {
+            RequireIdle(); RequireConnectionStep();
+            var projection=service as IManualPairingStatusService;
+            PairingCode=""; PairingStage="";
+            if(projection==null)return;
+            await RunAsync(()=>projection.ManualPairingStatusAsync(State.Copy(),token),token);
+            if(LastResult.Succeeded){PairingCode=LastResult.PairingCode ?? "";PairingStage=LastResult.PairingStage ?? "";}
+            Notify(false);
         }
 
         public async Task CheckConnectionAsync(CancellationToken token)
@@ -372,6 +381,7 @@ namespace NetCrate.Setup
             Busy = true;
             ProgressMessage = "Checking this computer...";
             Notify(false);
+            try {
             try
             {
                 token.ThrowIfCancellationRequested();
@@ -389,6 +399,15 @@ namespace NetCrate.Setup
             {
                 // The service returns safe messages for expected failures. Never show raw process output here.
                 LastResult = SetupResult.ActionRequired("operation-failed", "This step could not finish. Check that the drive is connected, then choose Try again.");
+            }
+                if(!LastResult.Succeeded && State.Step==SetupStep.Connect && !token.IsCancellationRequested) {
+                    PairingCode=""; PairingStage="";
+                    var projection=service as IManualPairingStatusService;
+                    if(projection!=null)try {
+                        var status=await projection.ManualPairingStatusAsync(State.Copy(),token);
+                        if(status!=null&&status.Succeeded){PairingCode=status.PairingCode ?? "";PairingStage=status.PairingStage ?? "";}
+                    } catch(Exception) { }
+                }
             }
             finally
             {

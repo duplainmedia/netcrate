@@ -31,6 +31,7 @@ jobs:
           ./tests/installation/Test-DependencyPaths.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-DependencyPaths"
           ./tests/installation/Test-SoftwarePlan.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SoftwarePlan"
           ./tests/installation/Test-SetupConsent.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-SetupConsent"
+          ./tests/installation/Test-OrdinaryBridgeRouting.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-Routing"
           ./tests/pairing/Test-NetworkSetup.ps1
           ./tests/pairing/Test-NetworkSession.ps1
           ./tests/pairing/Test-SetupWire.ps1
@@ -65,5 +66,8 @@ jobs:
           ./tests/installation/Test-RecoveryTransferDesktop.ps1 -TestRoot "$env:RUNNER_TEMP/NetCrate-RecoveryTransfer" -PowerShellExe $tools.PowerShell -ResticExe $tools.Restic
           ./tests/pairing/Test-NetworkDesktop.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools"
           ./tests/pairing/Test-NetworkExchange.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools"
+          ./tests/pairing/Test-NetworkExchange.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools" -Resume
+          ./tests/pairing/Test-NetworkExchange.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools" -ManualResume
+          ./tests/pairing/Test-NetworkExchange.ps1 -ToolsRoot "$env:RUNNER_TEMP/NetCrate-Tools/Tools" -LateAck
           $fixture = "$env:RUNNER_TEMP/NC5-" + [guid]::NewGuid().ToString('N').Substring(0,8)
           ./tests/installation/Test-CleanupRetry.ps1 -TestRoot $fixture -ResticExe $tools.Restic -PythonExe $tools.Python -RestServerExe $tools.RestServer

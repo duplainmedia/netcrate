@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 
 namespace NetCrate.Setup
 {
-    public enum NetworkSetupPhase { Idle, WaitingForPeer, CompareDevice, CompareConnection, WaitingForAcknowledgment, Connected, Failed }
+    public enum NetworkSetupPhase { Idle, WaitingForPeer, CompareDevice, CompareConnection, WaitingForAcknowledgment, Connected, Failed, ReceptionRequired }
     public sealed class NetworkSetupPeer
     {
         public string Name { get; set; }

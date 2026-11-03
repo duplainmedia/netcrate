@@ -1,5 +1,5 @@
 #requires -Version 7.4
-param([Parameter(Mandatory)][string]$ToolsRoot,[switch]$Renewal,[switch]$LateAck,[string]$TestRoot=(Join-Path $env:TEMP ('NC-exchange-'+[guid]::NewGuid().ToString('N').Substring(0,8))))
+param([Parameter(Mandatory)][string]$ToolsRoot,[switch]$Renewal,[switch]$LateAck,[switch]$Resume,[switch]$ManualResume,[string]$TestRoot=(Join-Path $env:TEMP ('NC-exchange-'+[guid]::NewGuid().ToString('N').Substring(0,8))))
 $ErrorActionPreference='Stop'
 if(Test-Path -LiteralPath $TestRoot){throw 'Choose a new disposable TestRoot.'}
 $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -95,6 +95,41 @@ try {
     Assert ($manual.PairingCode -ceq $device.ComparisonCode -and $imported.PairingCode -ceq $device.ComparisonCode) 'File fallback replaced a pending network identity.'
     $confirmed=Confirm-NetCrateNetworkSession $serverCtx $device.ComparisonCode
     Assert ($confirmed.Phase -ceq 'WaitingForPeer' -and -not $confirmed.ComparisonCode) 'Server displayed the reply code before delivery.'
+    if($ManualResume){
+        Stop-NetCrateNetworkSession $serverCtx
+        $repeat=Invoke-NetCrateSetupAction ImportConnection $ss $server ''
+        Assert ($repeat.PairingStage -ceq 'RequestConfirmed') 'Exact repeat import asked to reconfirm the accepted device.'
+        $status=Invoke-NetCrateSetupAction ManualPairingStatus $ss $server ''
+        Assert ($status.PairingStage -ceq 'RequestConfirmed' -and $status.PairingCode -ceq $device.ComparisonCode) 'Manual reopen lost the confirmed request projection.'
+        $ss | Add-Member PairingCode $device.ComparisonCode -Force
+        & $engine {function script:Start-Process {throw 'Repeated confirmation reactivated firewall.'};function script:Set-NetCrateOwnedTasks {throw 'Repeated confirmation reactivated tasks.'}}
+        $null=Invoke-NetCrateSetupAction ConfirmConnection $ss $server ''
+        [IO.File]::WriteAllText((Join-Path $TestRoot invalid.netcrate),'{}');$ss.Path=Join-Path $TestRoot invalid.netcrate
+        Reject {Invoke-NetCrateSetupAction ImportConnection $ss $server ''}
+        Assert ((Invoke-NetCrateSetupAction ManualPairingStatus $ss $server '').PairingStage -ceq 'RequestConfirmed') 'Malformed import evicted validated manual status.'
+        $foreign=Join-Path $TestRoot Foreign
+        $null=New-NetCrateIdentity $foreign ('4'*32) Source
+        $wrong=New-NetCratePairingRequest $foreign 'FIXTURE-EDIT' $project $cs.NetworkAddress -BackupMode Folder
+        $ss.Path=Join-Path $TestRoot competing.netcrate;Write-NetCrateJson $ss.Path $wrong
+        Reject {Invoke-NetCrateSetupAction ImportConnection $ss $server ''}
+        Assert ((Invoke-NetCrateSetupAction ManualPairingStatus $ss $server '').PairingStage -ceq 'RequestConfirmed') 'Competing import evicted validated manual status.'
+        $originalAddress=$ss.NetworkAddress;$ss.NetworkAddress='127.0.0.2'
+        Reject {Invoke-NetCrateSetupAction ManualPairingStatus $ss $server ''}
+        $ss.NetworkAddress=$originalAddress
+        Write-Output 'PASS manual installation/address-bound confirmed status, exact repeat import and confirmation without reactivation, malformed preservation.'
+        return
+    }
+    if($Resume){
+        $identity=(Unprotect-NetCrateRecord $server inbound-request).Request.RequestId
+        Stop-NetCrateNetworkSession $serverCtx
+        $serverCtx=New-NetCrateNetworkContext $server $ss
+        $closed=Get-NetCrateNetworkStatus $serverCtx
+        Assert ($closed.Phase -ceq 'ReceptionRequired' -and -not $serverCtx.Listener) 'Closed confirmed server reports acknowledgment wait before reply delivery.'
+        $denied=$serverReq.PSObject.Copy();$denied.ApproveFirewall=$false
+        Reject {Start-NetCrateNetworkSession $serverCtx $denied}
+        Start-NetCrateNetworkSession $serverCtx $serverReq
+        Assert ((Unprotect-NetCrateRecord $server inbound-request).Request.RequestId -ceq $identity) 'Reception reapproval replaced the accepted identity.'
+    }
     if($Renewal){
         Stop-NetCrateNetworkSession $serverCtx
         $expired=Unprotect-NetCrateRecord $server inbound-request
@@ -134,6 +169,12 @@ try {
     $reply=Exchange
     $confirmed=Get-NetCrateNetworkStatus $serverCtx
     Assert ($confirmed.Phase -ceq 'CompareConnection' -and $reply.Phase -ceq 'CompareConnection' -and $reply.ComparisonCode -ceq $confirmed.ComparisonCode) 'Connection codes differ.'
+    if($Resume){
+        Stop-NetCrateNetworkSession $serverCtx
+        $serverCtx=New-NetCrateNetworkContext $server $ss
+        $closed=Get-NetCrateNetworkStatus $serverCtx
+        Assert ($closed.Phase -ceq 'CompareConnection' -and $closed.ComparisonCode -ceq $reply.ComparisonCode -and -not $serverCtx.Listener) 'Delivered reply comparison was hidden after reopen.'
+    }
     Reject {Confirm-NetCrateNetworkSession $clientCtx '0000 0000 0000 0000'}
     Assert (-not (Get-NetCratePairingRecord $source paired-secrets)) 'Source imported active credentials before the second comparison.'
     $evidence=Unprotect-NetCrateRecord $source network-proof

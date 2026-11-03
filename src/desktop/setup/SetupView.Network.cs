@@ -32,7 +32,7 @@ namespace NetCrate.Setup {
 
    if(manualMode){ManualScreen(panel);return;}
    panel.Children.Add(Text("Device names from NetBird are hints. Both code comparisons are still required to verify identity.",12,Theme.Muted));
-   if(networkStatus.Phase==NetworkSetupPhase.Idle||networkStatus.Phase==NetworkSetupPhase.Failed) {
+   if(networkStatus.Phase==NetworkSetupPhase.Idle||networkStatus.Phase==NetworkSetupPhase.Failed||networkStatus.Phase==NetworkSetupPhase.ReceptionRequired) {
     panel.Children.Add(Text("This computer's private IPv4 address",13,Theme.Text));
     var local=Input("This computer private IPv4 address",localAddress);local.TextChanged+=delegate{localAddress=local.Text;ResetFirewallConsent();};panel.Children.Add(local);
     panel.Children.Add(Text(server ? "Intended Editing Computer private IPv4 address" : "Backup Server private IPv4 address",13,Theme.Text));
@@ -59,7 +59,7 @@ namespace NetCrate.Setup {
    if(!String.IsNullOrEmpty(networkStatus.Message))panel.Children.Add(Text(networkStatus.Message,13,networkStatus.Phase==NetworkSetupPhase.Failed ? Theme.Warning : Theme.Muted));
    if(networkStatus.Phase==NetworkSetupPhase.CompareDevice||networkStatus.Phase==NetworkSetupPhase.CompareConnection)Secondary(panel,"Codes differ — stop",async ()=>{await StopNetworkAsync();viewMessage="Connection stopped. Check that you selected the intended computer, then start again.";Render();});
    if(networkStatus.Phase!=NetworkSetupPhase.Idle&&networkStatus.Phase!=NetworkSetupPhase.Connected)Secondary(panel,"Start again",async ()=>{if(MessageBox.Show(this,"Replace the current pending connection and request a fresh temporary reception lease?","Start connection again",MessageBoxButton.YesNo,MessageBoxImage.Question)==MessageBoxResult.Yes)await RunSafeAsync(()=>NetworkActionAsync(true));});
-   Secondary(panel,"Use manual file exchange",async ()=>await RunLocalAsync(async delegate {await StopNetworkAsync();BindManualAddress(false);manualMode=true;Render();}));
+   Secondary(panel,"Use manual file exchange",async ()=>await RunLocalAsync(async delegate {await StopNetworkAsync();BindManualAddress(false);manualMode=true;await controller.HydrateManualPairingAsync(CheckToken);Render();}));
   }
   void Code(StackPanel panel){var code=Input("Code to compare on both computers",networkStatus.ComparisonCode);code.IsReadOnly=true;code.FontSize=24;code.FontFamily=new System.Windows.Media.FontFamily("Consolas");panel.Children.Add(code);}
   void UpdateFooter(){Control c;if(controls.TryGetValue(PrimaryLabel().Replace("_",""),out c))c.IsEnabled=PrimaryEnabled();}
@@ -76,7 +76,7 @@ namespace NetCrate.Setup {
    if(networkStatus.Phase==NetworkSetupPhase.Connected){if(!controller.State.Connected)controller.RecordNetworkVerified();}
    else InvalidateNetworkProof();
   }
-  bool ShouldPoll(){return (networkStatus.Phase==NetworkSetupPhase.CompareDevice&&controller.State.Role==ComputerRole.EditingComputer)||networkStatus.Phase==NetworkSetupPhase.WaitingForPeer||networkStatus.Phase==NetworkSetupPhase.WaitingForAcknowledgment||(networkStatus.Phase==NetworkSetupPhase.CompareConnection&&controller.State.Role==ComputerRole.BackupServer);}
+  bool ShouldPoll(){return (networkStatus.Phase==NetworkSetupPhase.CompareDevice&&controller.State.Role==ComputerRole.EditingComputer)||networkStatus.Phase==NetworkSetupPhase.ReceptionRequired||networkStatus.Phase==NetworkSetupPhase.WaitingForPeer||networkStatus.Phase==NetworkSetupPhase.WaitingForAcknowledgment||(networkStatus.Phase==NetworkSetupPhase.CompareConnection&&controller.State.Role==ComputerRole.BackupServer);}
   void StartPolling(){
    if(networkCancellation!=null||controller.State.Step!=SetupStep.Connect||manualMode)return;
    if(!ShouldPoll())return;

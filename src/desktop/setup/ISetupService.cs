@@ -4,6 +4,9 @@ using System.Threading.Tasks;
 
 namespace NetCrate.Setup
 {
+    public interface IManualPairingStatusService {
+        Task<SetupResult> ManualPairingStatusAsync(SetupState state, CancellationToken token);
+    }
     public interface ISoftwarePreparationService {
         Task<SetupResult> ReviewSoftwareAsync(SetupState state, CancellationToken token);
         Task<SetupResult> PrepareApprovedAsync(SetupState state, string planId, IProgress<SoftwareProgress> progress, CancellationToken token);

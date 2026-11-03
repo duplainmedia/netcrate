@@ -38,6 +38,22 @@ function Test-NetCrateInstalledPackage {
     } catch { return $false }
 }
 
+function Get-NetCrateBootstrapExecutable([string]$Root) {
+    # Ordinary actions only need the pinned handoff executable, not a complete
+    # installation/archive audit. Full package verification stays in preparation.
+    try {
+        $package=(Get-NetCrateDependencyCatalog).Packages | Where-Object Name -CEQ PowerShell
+        $destination=[IO.Path]::Combine((Assert-NetCrateLocalPath $Root),'Tools','PowerShell',$package.Version)
+        $stamp=Read-NetCrateJson ([IO.Path]::Combine($destination,'.netcrate-package.json')) -MaximumBytes 1048576
+        if($stamp.Version -ne 1 -or $stamp.Name -cne 'PowerShell' -or $stamp.PackageVersion -cne $package.Version -or $stamp.ArchiveSHA256 -cne $package.SHA256){return ''}
+        $entry=@($stamp.Files | Where-Object Path -CEQ $package.Executable)
+        if($entry.Count -ne 1 -or $entry[0].SHA256 -cnotmatch '^[a-f0-9]{64}$'){return ''}
+        $exe=Assert-NetCrateLocalPath ([IO.Path]::Combine($destination,$package.Executable))
+        if([IO.File]::Exists($exe) -and (Get-FileHash -LiteralPath $exe).Hash -ieq $entry[0].SHA256){return $exe}
+    } catch { }
+    return ''
+}
+
 function Install-NetCratePackage {
     param($Package, [string]$Root, [scriptblock]$Progress)
     $rootPath = Assert-NetCrateLocalPath $Root
@@ -192,3 +208,4 @@ function Install-NetCrateRecoveryTools {
     return [pscustomobject]$tools
 }
 Export-ModuleMember -Function Install-NetCrateRecoveryTools
+Export-ModuleMember -Function Get-NetCrateBootstrapExecutable

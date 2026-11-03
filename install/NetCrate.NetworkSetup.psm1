@@ -176,6 +176,20 @@ function Get-NetCrateNetworkStatus($Context) {
             $endpoint=Read-NetCrateJson ([IO.Path]::Combine($Context.Root,'endpoint.json'))
             $result.LocalAddress=$endpoint.Address;$result.PeerAddress=$endpoint.SourceAddress
         }
+        if($workerSettings){
+            $inbound=Get-NetCratePairingRecord $Context.Root inbound-request
+            $sealed=Get-NetCratePairingRecord $Context.Root outbound-reply
+            $verified=Get-NetCratePairingRecord $Context.Root network-verified
+            if([datetimeoffset]$inbound.Request.ExpiresUtc -gt [datetimeoffset]::UtcNow -and (-not $verified -or $verified.RequestId -cne $inbound.Request.RequestId)){
+                if($sealed -and $sealed.Reply.RequestId -ceq $inbound.Request.RequestId -and (Test-NetCrateDeliveredReply $Context.Root $sealed.Reply)){
+                    $result.Phase='CompareConnection';$result.ComparisonCode=$sealed.Reply.ConnectionCode
+                    $result.Message='Compare this connection code on the Editing Computer. Temporary reception remains closed.'
+                } else {
+                    $result.Phase='ReceptionRequired'
+                    $result.Message='Approve temporary reception again for these same addresses so the Editing Computer can collect the existing encrypted reply.'
+                }
+            }
+        }
         return $result
     }
     if($Context.Role -ceq 'Worker'){
@@ -212,7 +226,7 @@ function Invoke-NetCrateNetworkExchange($Context,[switch]$ReceiveOnly) {
     Test-NetCrateNetworkLease $Context
     if(-not $Context.Active){
         $prior=Get-NetCrateNetworkStatus $Context
-        if($prior.Phase -cne 'WaitingForAcknowledgment'){return $prior}
+        if($prior.Phase -cnotin @('WaitingForAcknowledgment','CompareConnection','ReceptionRequired')){return $prior}
     } elseif($Context.Role -ceq 'Worker'){
         if($Context.Listener.Pending()){
             $channel=$null

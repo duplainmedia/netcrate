@@ -9,7 +9,7 @@ using System.Web.Script.Serialization;
 
 namespace NetCrate.Setup
 {
-    public sealed class WindowsSetupService : ISetupService, IRestoreService, ISoftwarePreparationService
+    public sealed class WindowsSetupService : ISetupService, IRestoreService, ISoftwarePreparationService, IManualPairingStatusService
     {
         private readonly string engineRoot;
         private readonly string setupRoot;
@@ -82,7 +82,7 @@ namespace NetCrate.Setup
 
         public async Task<SetupResult> InvokePreparationAsync(string action, SetupState state, CancellationToken token, string path = null, string code = null, RestoreRequest restore = null, ScheduleRequest schedule = null, MaintenanceRequest maintenance = null, string acceptedPlanId = null, IProgress<SoftwareProgress> softwareProgress = null)
         {
-            string[] actions = { "ReviewSoftware", "ReviewNetwork", "ReviewRecoveryTools", "InstallRecoveryTools", "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule", "StorageStatus", "CheckStorage", "PreviewRetention", "ApplyRetention" };
+            string[] actions = { "ManualPairingStatus", "ReviewSoftware", "ReviewNetwork", "ReviewRecoveryTools", "InstallRecoveryTools", "Inspect", "Prepare", "Network", "SaveRecovery", "ExportConnection", "ImportConnection", "ConfirmConnection", "CheckConnection", "CheckSample", "Finish", "QueueBackup", "ListBackups", "ListBackupChildren", "RestoreSelection", "ListSchedules", "SaveSchedule", "DisableSchedule", "StorageStatus", "CheckStorage", "PreviewRetention", "ApplyRetention" };
             if (Array.IndexOf(actions, action) < 0) throw new ArgumentException("Unsupported action.");
             token.ThrowIfCancellationRequested();
             string script = Path.Combine(engineRoot, "Invoke-SetupAction.ps1");
@@ -238,6 +238,9 @@ namespace NetCrate.Setup
 
         public Task<SetupResult> ExportConnectionAsync(SetupState state, string path, CancellationToken token)
         { return InvokePreparationAsync("ExportConnection", state, token, path); }
+
+        public Task<SetupResult> ManualPairingStatusAsync(SetupState state, CancellationToken token)
+        { return InvokePreparationAsync("ManualPairingStatus", state, token); }
 
         public Task<SetupResult> ImportConnectionAsync(SetupState state, string path, CancellationToken token)
         { return InvokePreparationAsync("ImportConnection", state, token, path); }

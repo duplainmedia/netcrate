@@ -233,7 +233,7 @@ function Get-NetCrateStableReply($Root) {
 
 function Invoke-NetCrateSetupAction {
     param([string]$Action, $State, [string]$Root, [string]$AppRoot, [scriptblock]$Progress)
-    if($Action -cin @('ExportConnection','ImportConnection','ConfirmConnection','CheckConnection')){
+    if($Action -cin @('ManualPairingStatus','ExportConnection','ImportConnection','ConfirmConnection','CheckConnection')){
         return Invoke-NetCratePairingLock $Root { Invoke-NetCrateSetupActionCore $Action $State $Root $AppRoot $Progress }
     }
     return Invoke-NetCrateSetupActionCore $Action $State $Root $AppRoot $Progress
@@ -264,6 +264,7 @@ function Invoke-NetCrateSetupActionCore {
         if ($owner.Role -cne $expectedRole -or $prepared.Role -cne $expectedRole -or (Get-NetCrateBackupMode $State) -cne (Get-NetCrateBackupMode $prepared) -or -not $prepared.Folder.Equals($State.Folder,[StringComparison]::OrdinalIgnoreCase)) { throw 'The setup choices differ from this prepared installation.' }
         $tools = Read-NetCrateJson ([IO.Path]::Combine($Root, 'tools.json'))
         switch -Exact ($Action) {
+            'ManualPairingStatus' {return Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role}
             'Network' {
                 $exe = [IO.Path]::Combine($env:ProgramFiles, 'NetBird', 'netbird-ui.exe')
                 if (-not [IO.File]::Exists($exe)) {
@@ -288,16 +289,27 @@ function Invoke-NetCrateSetupActionCore {
                 $bytes = [Text.Encoding]::UTF8.GetBytes(($wire | ConvertTo-Json -Depth 24))
                 $file = [IO.FileStream]::new($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
                 try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
+                if($owner.Role -ceq 'Worker'){Protect-NetCrateRecord $Root manual-reply-saved @{RequestId=$wire.RequestId}}
             }
             'ImportConnection' {
                 $wire = Read-NetCrateJson $State.Path -MaximumBytes 131072
                 if ($owner.Role -ceq 'Source') { $result = Receive-NetCrateStableReply $Root $wire; $code = $result.ConnectionCode; $stage = 'ReplyImported' }
-                else { $result = Receive-NetCrateStableRequest $Root $wire (Get-NetCrateBackupMode $prepared) ''; $code = $result.DeviceCode; $stage = 'RequestImported' }
+                else {
+                    $local=Resolve-NetCrateNetworkAddress $State
+                    $result = Receive-NetCrateStableRequest $Root $wire (Get-NetCrateBackupMode $prepared) ''
+                    Protect-NetCrateRecord $Root manual-selection @{RequestId=$result.RequestId;LocalAddress=$local}
+                    return Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role
+                }
                 $message = 'Compare this code with the code on your other computer. Choose Codes match only if they are identical.'
             }
             'ConfirmConnection' {
                 if ($owner.Role -ceq 'Worker') {
                     $pending = Unprotect-NetCrateRecord $Root 'inbound-request'
+                    $current=Get-NetCrateManualPairingStatus $Root $State $prepared $owner.Role
+                    if($current.PairingStage -cin @('RequestConfirmed','ReplySaved')){
+                        if($State.PairingCode -cne $pending.Request.DeviceCode){throw 'Compare the current device code on both computers.'}
+                        return $current
+                    }
                     Confirm-NetCratePairingRequest $Root $pending.Request.RequestId $State.PairingCode
                     $endpoint = Initialize-NetCrateEndpoint $Root (Resolve-NetCrateNetworkAddress $State) $pending.Request.NetworkAddress $tools
                     $repos = Read-NetCrateJson ([IO.Path]::Combine($Root, 'repositories.json'))

@@ -16,6 +16,47 @@ function Get-NetCratePairingRecord([string]$Root,[string]$Name) {
 function Assert-NetCrateLiveWire($Wire) {
     if([datetimeoffset]$Wire.ExpiresUtc -le [datetimeoffset]::UtcNow){throw 'The connection expired. Choose Start again on both computers.'}
 }
+function Get-NetCrateManualPairingStatus($Root,$State,$Prepared,$Role) {
+    $local=Resolve-NetCrateNetworkAddress $State
+    $code='';$stage=''
+    if($Role -ceq 'Worker'){
+        $inbound=Get-NetCratePairingRecord $Root inbound-request
+        if($inbound){
+            Assert-NetCrateLiveWire $inbound.Request
+            $activation=Get-NetCratePairingRecord $Root pairing-activated
+            $settings=Get-NetCrateWorkerPairingSettings $Root $inbound
+            if($settings -and $activation -and $activation.RequestId -ceq $inbound.Request.RequestId){
+                $endpoint=Read-NetCrateJson ([IO.Path]::Combine($Root,'endpoint.json'))
+                if($endpoint.Address -cne $local -or $endpoint.SourceAddress -cne $inbound.Request.NetworkAddress){throw 'The manual connection uses another private address.'}
+                $stage='RequestConfirmed';$code=$inbound.Request.DeviceCode
+                $saved=Get-NetCratePairingRecord $Root manual-reply-saved
+                $reply=Get-NetCratePairingRecord $Root outbound-reply
+                if($saved -and $reply -and $saved.RequestId -ceq $inbound.Request.RequestId -and $reply.Reply.RequestId -ceq $saved.RequestId){
+                    Assert-NetCrateLiveWire $reply.Reply
+                    $stage='ReplySaved';$code=$reply.Reply.ConnectionCode
+                }
+            } else {
+                $selection=Get-NetCratePairingRecord $Root manual-selection
+                if($selection -and $selection.RequestId -ceq $inbound.Request.RequestId -and $selection.LocalAddress -ceq $local){$stage='RequestImported';$code=$inbound.Request.DeviceCode}
+            }
+        }
+    } else {
+        $outbound=Get-NetCratePairingRecord $Root outbound-request
+        if($outbound){
+            Assert-NetCrateLiveWire $outbound.Request
+            if($outbound.Request.NetworkAddress -cne $local -or $outbound.Request.ProjectRoot -ine $Prepared.Folder -or (Get-NetCrateBackupMode $outbound.Request) -cne (Get-NetCrateBackupMode $Prepared)){throw 'The manual request differs from this installation.'}
+            $stage='RequestSaved';$code=$outbound.Request.DeviceCode
+            $pending=Get-NetCratePairingRecord $Root pending-reply
+            if($pending -and $pending.Reply.RequestId -ceq $outbound.Request.RequestId){
+                Assert-NetCrateLiveWire $pending.Reply
+                Test-NetCrateConnectionPayload $pending.Payload $outbound.Request $pending.Reply
+                Assert-NetCrateNetworkProof $Root $pending.Payload $outbound.Request
+                $stage=if($outbound.Consumed){'Paired'}else{'ReplyImported'};$code=$pending.Reply.ConnectionCode
+            }
+        }
+    }
+    return @{Succeeded=$true;Code='ok';Message='Manual connection status refreshed.';PairingCode=$code;PairingStage=$stage}
+}
 function Get-NetCrateStableRequest($Root,$Folder,$LocalAddress,$Mode) {
     $old=Get-NetCratePairingRecord $Root outbound-request
     if($old) {
@@ -148,7 +189,7 @@ function Reset-NetCratePendingPairing($Root) {
         return
     }
     if(-not [IO.File]::Exists([IO.Path]::Combine($Root,'endpoint.json')) -and -not [IO.File]::Exists([IO.Path]::Combine($Root,'settings.json'))){[IO.File]::Delete([IO.Path]::Combine($Root,'Secrets','tls-identity.json'))}
-    foreach($name in @('outbound-request','inbound-request','pending-reply','outbound-reply','network-proof','network-selection','reply-delivered','network-verified','pairing-activated')){
+    foreach($name in @('outbound-request','inbound-request','pending-reply','outbound-reply','network-proof','network-selection','manual-selection','manual-reply-saved','reply-delivered','network-verified','pairing-activated')){
         [IO.File]::Delete([IO.Path]::Combine($Root,'Secrets',$name+'.json'))
     }
 }

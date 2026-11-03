@@ -1,5 +1,5 @@
 #requires -Version 5.1
-param([Parameter(Mandatory)][ValidateSet('ReviewSoftware','ReviewNetwork','ReviewRecoveryTools','InstallRecoveryTools','Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection', 'ListSchedules', 'SaveSchedule', 'DisableSchedule','StorageStatus','CheckStorage','PreviewRetention','ApplyRetention')][string]$Action,
+param([Parameter(Mandatory)][ValidateSet('ManualPairingStatus','ReviewSoftware','ReviewNetwork','ReviewRecoveryTools','InstallRecoveryTools','Inspect', 'Prepare', 'Network', 'SaveRecovery', 'ExportConnection', 'ImportConnection', 'ConfirmConnection', 'CheckConnection', 'CheckSample', 'Finish', 'QueueBackup', 'ListBackups', 'ListBackupChildren', 'RestoreSelection', 'ListSchedules', 'SaveSchedule', 'DisableSchedule','StorageStatus','CheckStorage','PreviewRetention','ApplyRetention')][string]$Action,
     [Parameter(Mandatory)][string]$InputFile)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -111,13 +111,20 @@ try {
     $selectedFolder=if($state.PSObject.Properties.Name -contains 'Folder' -and $state.Folder){[string]$state.Folder}else{[Environment]::GetFolderPath('UserProfile')}
     $role=if($state.Role -ceq 'BackupServer'){'Worker'}else{'Source'}
     $planArguments=@{Root=$root;BootstrapRoot=$bootstrap;Role=$role;BackupMode=$mode;Folder=$selectedFolder}
-    $plan=Get-SetupSoftwarePlan $planArguments
+    $plan=$null
+    if($Action -cin @('ReviewSoftware','Inspect','Prepare')){$plan=Get-SetupSoftwarePlan $planArguments}
     if($Action -ceq 'ReviewSoftware'){@{Succeeded=$true;Code='ok';Message='Review the software and changes before preparing this computer.';PreparationPlan=$plan}|ConvertTo-Json -Depth 8 -Compress;exit 0}
     if($Action -ceq 'Inspect' -and (@($plan.Changes).Count -or $plan.ApplicationUpdateNeeded)){@{Succeeded=$false;Code='prepare-needed';Message='Review the software to install or update this NetCrate application and its required private copies.'}|ConvertTo-Json -Compress;exit 0}
     if($Action -ceq 'Prepare' -and $acceptedPlan -cne $plan.PlanId){Return-ApprovalNeeded}
     if ($PSVersionTable.PSVersion.Major -lt 7) {
         $bootstrap = [IO.Path]::Combine([IO.Path]::GetDirectoryName($InputFile), 'Bootstrap')
         Import-Module (Join-Path $PSScriptRoot 'NetCrate.Dependencies.psm1')
+        if($null -eq $plan){
+            $handoff=Get-NetCrateBootstrapExecutable $bootstrap
+            if(-not $handoff){Return-ApprovalNeeded}
+            & $handoff -NoLogo -NoProfile -NonInteractive -File $PSCommandPath -Action $Action -InputFile $InputFile
+            exit $LASTEXITCODE
+        }
         $package = (Get-NetCrateDependencyCatalog).Packages | Where-Object Name -CEQ PowerShell
         if ($Action -ceq 'Inspect') {
             $probe = [IO.Path]::Combine($bootstrap, 'Tools', 'PowerShell', $package.Version, 'pwsh.exe')

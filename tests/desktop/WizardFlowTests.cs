@@ -42,6 +42,8 @@ class WizardFlowTests {
   ResumePollsAndFinish();
   RecheckingConnectionDropsOldProof();
   ManualPairingUsesTypedPrivateAddress();
+  ManualServerReopenAndError();
+  ServerReceptionResume();
   app.Shutdown();Console.WriteLine("PASS: "+assertions+" guided wizard flow assertions.");
  }
  static void ServerComparisonAndRecovery(){
@@ -52,7 +54,12 @@ class WizardFlowTests {
   Assert(Find<Button>(view).Exists(x=>AutomationProperties.GetName(x)=="Save recovery file"),"Server recovery did not get its own required page.");
   Assert(!Find<Button>(view).Find(x=>AutomationProperties.GetName(x)=="Continue").IsEnabled,"Server continued without recovery delivery.");
   c.RecordRecoveryDelivery(null);Assert(!Find<Button>(view).Exists(x=>AutomationProperties.GetName(x)=="Continue with local copy"),"Clipboard-only delivery incorrectly allows local-file continuation.");
-  c.RecordRecoveryDelivery(@"C:\Recovery\saved.netcrate");Click(view,"Continue with local copy");
+  c.RecordRecoveryDelivery(@"C:\Recovery\saved.netcrate");c.RecordRecoveryDelivery(null);
+  Assert(c.State.RecoverySavedPath==@"C:\Recovery\saved.netcrate"&&!c.State.RecoveryConfirmed,"Copying recovery contents forgot the saved local file or asserted a separate copy.");
+  var copied=new RecoveryTestClipboard();var expiry=new RecoveryTestExpiry();
+  using(var document=new RecoveryDocument("{\"Version\":1,\"Kind\":\"netcrate-recovery\",\"Primary\":{\"Id\":\""+new string('a',64)+"\",\"Password\":\"fixture-primary\"},\"Results\":{\"Id\":\""+new string('b',64)+"\",\"Password\":\"fixture-results\"}}"))
+  using(var lifetime=new RecoveryClipboardLifetime(copied,expiry)){lifetime.Copy(document);c.RecordRecoveryDelivery(null);expiry.Callback();Assert(copied.Cleared&&c.State.RecoverySavedPath==@"C:\Recovery\saved.netcrate"&&!c.State.RecoveryConfirmed,"Recovery copy expiry lost local-file evidence or asserted a separate copy.");}
+  Click(view,"Continue with local copy");
   Assert(c.State.RecoveryLocalOnly&&!c.State.RecoveryConfirmed,"Local recovery was falsely recorded as a separate protected copy.");
   Snapshot(view,"recovery");
   pairing.Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.Idle};Click(view,"Continue");Pump();
@@ -156,6 +163,34 @@ class WizardFlowTests {
   Assert(!c.State.Connected&&!c.State.SampleVerified,"Returning to a failed manual connection retained old connection or sample proof.");
   view.Close();Pump();
  }
+ static void ManualServerReopenAndError(){
+  var service=new FixtureService{PackagesReused=true,RequiredManualAddress="192.168.1.20",DurableStage="RequestConfirmed",DurableCode="ABCD EF01 2345 6789"};
+  var store=new ResumeStore{Saved=new SetupState{Role=ComputerRole.BackupServer,Folder=@"C:\BackupStorage",NetworkAddress="192.168.1.20",RecoveryExported=true,RecoverySavedPath=@"C:\Recovery\keys.netcrate",RecoveryLocalOnly=true}};
+  var c=new SetupController(service,store);var view=new SetupView(c,null,new Pairing());view.Show();Pump();Click(view,"Continue");Pump();Click(view,"Use manual file exchange");Pump();
+  Assert(c.PairingStage=="RequestConfirmed"&&Find<Button>(view).Exists(b=>AutomationProperties.GetName(b)=="Save reply file"),"Fresh controller manual entry cannot save its confirmed server reply.");
+  service.RequiredManualAddress="192.168.1.99";c.ImportConnectionAsync("invalid.netcrate",CancellationToken.None).GetAwaiter().GetResult();Pump();
+  Assert(String.IsNullOrEmpty(c.PairingStage),"Mismatched address retained a manual comparison.");
+  service.RequiredManualAddress="192.168.1.20";service.ManualConnectionUnavailable=true;c.CheckConnectionAsync(CancellationToken.None).GetAwaiter().GetResult();Pump();
+  Assert(!c.LastResult.Succeeded&&c.PairingStage=="RequestConfirmed"&&Find<Button>(view).Exists(b=>AutomationProperties.GetName(b)=="Save reply file"),"Manual error did not hydrate validated backend evidence while retaining its failure.");
+  view.Close();Pump();
+ }
+ class RecoveryTestClipboard:IRecoveryClipboard{public bool Cleared;public uint Write(RecoveryClipboardPayload p){return 1;}public bool ClearIfOwned(uint t){Cleared=true;return true;}}
+ class RecoveryTestExpiry:IRecoveryExpiryScheduler{public Action Callback;public IDisposable Schedule(TimeSpan delay,Action callback){Callback=callback;return new Empty();}class Empty:IDisposable{public void Dispose(){}}}
+ class ResumeStore:ISetupStore{public SetupState Saved;public SetupState Load(){return Saved.Copy();}public void Save(SetupState s){Saved=s.Copy();}}
+ static void ServerReceptionResume(){
+  var pair=new Pairing{Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.ReceptionRequired,LocalAddress="192.168.1.20",PeerAddress="192.168.1.10"}};
+  var store=new ResumeStore{Saved=new SetupState{Role=ComputerRole.BackupServer,Folder=@"C:\BackupStorage",NetworkAddress="192.168.1.20",RecoveryExported=true,RecoverySavedPath=@"C:\Recovery\keys.netcrate",RecoveryLocalOnly=true}};
+  var c=new SetupController(new FixtureService{PackagesReused=true},store);var view=new SetupView(c,null,pair);view.Show();Pump();Click(view,"Continue");Pump();
+  var primary=Find<Button>(view).Find(b=>Object.Equals(b.Tag,"Primary"));
+  Assert(!primary.IsEnabled&&Find<CheckBox>(view).Exists(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule"),"Reception resume omitted fresh explicit firewall approval.");
+  Assert(Find<TextBox>(view).Exists(b=>b.Text=="192.168.1.20")&&Find<TextBox>(view).Exists(b=>b.Text=="192.168.1.10"),"Reception resume lost the original address scope.");
+  Find<CheckBox>(view).Find(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule").IsChecked=true;Pump();Click(view,"Allow temporary reception");Pump();
+  Assert(pair.LastRequest!=null&&!pair.LastRequest.StartAgain&&pair.LastRequest.ApproveFirewall,"Reception resume requested identity replacement instead of reapproval.");
+  view.Close();Pump();
+  pair=new Pairing{Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.CompareConnection,ComparisonCode="ABCD EF01 2345 6789"}};
+  c=new SetupController(new FixtureService{PackagesReused=true},store);view=new SetupView(c,null,pair);view.Show();Pump();Click(view,"Continue");Pump();
+  Assert(Find<TextBox>(view).Exists(b=>b.IsReadOnly&&b.Text=="ABCD EF01 2345 6789")&&!Find<CheckBox>(view).Exists(b=>AutomationProperties.GetName(b)=="Approve temporary setup firewall rule"),"Delivered server reopen lost its comparison or requested another listener.");view.Close();Pump();
+ }
  static void Snapshot(SetupView view,string name){
   string directory=Path.Combine(Environment.CurrentDirectory,".superpowers","sdd","2026-11-03-guided-setup","ui");Directory.CreateDirectory(directory);
   if(!view.IsVisible){view.Show();Pump();}
@@ -172,11 +207,13 @@ class WizardFlowTests {
  static void Pump(){var frame=new DispatcherFrame();Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>frame.Continue=false));Dispatcher.PushFrame(frame);}
  static List<T> Find<T>(DependencyObject root)where T:DependencyObject{var list=new List<T>();if(root is T)list.Add((T)root);foreach(object child in LogicalTreeHelper.GetChildren(root))if(child is DependencyObject)list.AddRange(Find<T>((DependencyObject)child));return list;}
  class Store:ISetupStore{public SetupState Load(){return null;}public void Save(SetupState s){}}
- class FixtureService:ISetupService,ISoftwarePreparationService{
+ class FixtureService:ISetupService,ISoftwarePreparationService,IManualPairingStatusService{
   public bool FailPreparation,PackagesReused,ManualConnectionUnavailable;
   public string RequiredManualAddress;
+  public string DurableStage,DurableCode;
+  public Task<SetupResult> ManualPairingStatusAsync(SetupState s,CancellationToken t){var r=SetupResult.Done("Manual status");if(RequiredManualAddress==null||s.NetworkAddress==RequiredManualAddress){r.PairingStage=DurableStage;r.PairingCode=DurableCode;}return Task.FromResult(r);}
   bool manualConfirmed;
-  Task<SetupResult> ManualResult(SetupState state,string stage,string code){if(RequiredManualAddress==null)return Done();if(state.NetworkAddress!=RequiredManualAddress)return Task.FromResult(SetupResult.ActionRequired("netbird-unavailable","No NetBird adapter exists; the explicit LAN address is required."));var result=SetupResult.Done("Private-address pairing completed.");result.PairingCode=code;result.PairingStage=stage;return Task.FromResult(result);}
+  Task<SetupResult> ManualResult(SetupState state,string stage,string code){if(RequiredManualAddress==null)return Done();if(state.NetworkAddress!=RequiredManualAddress)return Task.FromResult(SetupResult.ActionRequired("netbird-unavailable","No NetBird adapter exists; the explicit LAN address is required."));if(stage!=null){DurableStage=stage;DurableCode=code;}var result=SetupResult.Done("Private-address pairing completed.");result.PairingCode=code;result.PairingStage=stage;return Task.FromResult(result);}
   Task<SetupResult> Done(){return Task.FromResult(SetupResult.Done("Ready"));}
   public Task<SetupResult> CheckFolderAsync(ComputerRole r,string f,CancellationToken t){return Done();}
   public Task<SetupResult> InspectAsync(SetupState s,CancellationToken t){return Done();}
@@ -186,5 +223,5 @@ class WizardFlowTests {
   public Task<SetupResult> PrepareAsync(SetupState s,IProgress<string> p,CancellationToken t){throw new Exception("Ungated preparation");}
   public Task<SetupResult> SaveRecoveryAsync(SetupState s,string p,CancellationToken t){return Done();}public Task<SetupResult> ExportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;return ManualResult(s,"RequestSaved","ABCD EF01 2345 6789");}public Task<SetupResult> ImportConnectionAsync(SetupState s,string p,CancellationToken t){manualConfirmed=false;return ManualResult(s,"ReplyImported","ABCD EF01 2345 6789");}public Task<SetupResult> ConfirmConnectionAsync(SetupState s,string p,CancellationToken t){if(RequiredManualAddress!=null&&p!="ABCD EF01 2345 6789")return Task.FromResult(SetupResult.ActionRequired("code-missing","The imported comparison code was lost."));manualConfirmed=RequiredManualAddress==null||s.NetworkAddress==RequiredManualAddress;return ManualResult(s,"ReplyConfirmed",p);}public Task<SetupResult> NetworkAsync(SetupState s,CancellationToken t){return Done();}public Task<SetupResult> FinishAsync(SetupState s,CancellationToken t){return Task.FromResult(SetupResult.Done("Fixture finish verified"));}public Task<SetupResult> CheckConnectionAsync(SetupState s,CancellationToken t){return RequiredManualAddress!=null&&!manualConfirmed ? Task.FromResult(SetupResult.ActionRequired("confirm-first","Compare the imported codes before checking the connection.")) : ManualConnectionUnavailable ? Task.FromResult(SetupResult.ActionRequired("offline","The private connection is offline.")) : ManualResult(s,null,null);}public Task<SetupResult> CheckSampleAsync(SetupState s,IProgress<string> p,CancellationToken t){return Done();}
  }
- class Pairing:INetworkPairingService{public TaskCompletionSource<NetworkSetupStatus> InspectCompletion;public NetworkSetupStatus PollStatus;public NetworkSetupStatus Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.Idle};public Task<NetworkSetupStatus> InspectAsync(SetupState s,CancellationToken t){return InspectCompletion==null ? Task.FromResult(Status) : InspectCompletion.Task;}public Task<NetworkSetupStatus> StartAsync(SetupState s,NetworkSetupRequest r,CancellationToken t){return InspectAsync(s,t);}public Task<NetworkSetupStatus> PollAsync(SetupState s,CancellationToken t){return Task.FromResult(PollStatus ?? Status);}public Task<NetworkSetupStatus> ConfirmAsync(SetupState s,string c,CancellationToken t){return InspectAsync(s,t);}public Task<NetworkSetupStatus> ResetPendingAsync(SetupState s,CancellationToken t){Status=new NetworkSetupStatus();return Task.FromResult(Status);}public Task<NetworkSetupStatus> StopAsync(CancellationToken t){return Task.FromResult(new NetworkSetupStatus());}public void Dispose(){}}
+ class Pairing:INetworkPairingService{public NetworkSetupRequest LastRequest;public TaskCompletionSource<NetworkSetupStatus> InspectCompletion;public NetworkSetupStatus PollStatus;public NetworkSetupStatus Status=new NetworkSetupStatus{Phase=NetworkSetupPhase.Idle};public Task<NetworkSetupStatus> InspectAsync(SetupState s,CancellationToken t){return InspectCompletion==null ? Task.FromResult(Status) : InspectCompletion.Task;}public Task<NetworkSetupStatus> StartAsync(SetupState s,NetworkSetupRequest r,CancellationToken t){LastRequest=r;return InspectAsync(s,t);}public Task<NetworkSetupStatus> PollAsync(SetupState s,CancellationToken t){return Task.FromResult(PollStatus ?? Status);}public Task<NetworkSetupStatus> ConfirmAsync(SetupState s,string c,CancellationToken t){return InspectAsync(s,t);}public Task<NetworkSetupStatus> ResetPendingAsync(SetupState s,CancellationToken t){Status=new NetworkSetupStatus();return Task.FromResult(Status);}public Task<NetworkSetupStatus> StopAsync(CancellationToken t){return Task.FromResult(new NetworkSetupStatus());}public void Dispose(){}}
 }
