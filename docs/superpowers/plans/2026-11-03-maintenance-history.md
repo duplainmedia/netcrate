@@ -10,4 +10,6 @@ Only validated terminal records with no unfinished destructive work may be retir
 - [x] Run the new regression, native cleanup/history regression, maintenance checks, desktop/versioning and package checks using disposable Temp fixtures.
 - [x] Add the existing logo to the README header and validate its tracked asset path.
 - [x] Set the next development patch to `0.1.2`, retain Unreleased notes and remove the resolved roadmap limitation. Do not invent a release/tag.
-- [ ] Obtain an independent scoped review, push the branch and open a PR. Leave merge and publication to the user.
+- [x] Obtain an independent scoped review, push the branch and open a PR. Leave merge and publication to the user.
+
+PR [#12](https://github.com/duplainmedia/netcrate/pull/12) is open. Independent review found no actionable issues. Windows CI verifies the final branch; merge remains with the user.
