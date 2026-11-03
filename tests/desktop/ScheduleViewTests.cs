@@ -32,6 +32,20 @@ class ScheduleViewTests {
   service.Items=new List<ScheduleItem>{new ScheduleItem{Project="C:\\Files\\日本語",Enabled=true,TimeOfDay="09:15",NextDueUtc="2026-11-03T14:15:00Z",TimeZone="UTC"}};
   view.RefreshStatusAsync().GetAwaiter().GetResult();
   Check(((ScheduleItem)list.SelectedItem).NextRun.Contains("14:15 +00:00")&&daily.Text=="12:34"&&editor.Message=="Choose a valid daily time.","Long-lived schedule refresh lost zone coherence, unsaved time or action error.");
+  foreach(string action in new[]{"SaveSchedule","DisableSchedule","ListSchedules"}){
+   service.ThrowAction=null;editor.SaveAsync("C:\\Files\\日本語","09:15",true,CancellationToken.None).GetAwaiter().GetResult();view.RefreshStatusAsync().GetAwaiter().GetResult();list.SelectedItem=editor.Items[0];
+   service.ThrowAction=action;string command=action=="SaveSchedule"?"Save schedule":action=="DisableSchedule"?"Disable schedule":"Refresh";
+   Find<Button>(view).Find(b=>AutomationProperties.GetName(b)==command).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+   string error=editor.Message;
+   Check(error.Contains("could not")&&!error.Contains("private fixture"),"Thrown "+action+" error was not retained safely in editor state.");
+   service.ThrowAction=null;view.RefreshStatusAsync().GetAwaiter().GetResult();
+   Check(editor.Message==error&&Find<TextBlock>(view).Exists(t=>t.Text==error),"Background refresh erased thrown "+action+" error.");
+   editor.SaveAsync("C:\\Files\\日本語","09:15",true,CancellationToken.None).GetAwaiter().GetResult();view.RefreshStatusAsync().GetAwaiter().GetResult();
+   Check(editor.Message=="Saved.","Successful explicit action did not clear thrown "+action+" error.");
+  }
+  service.ThrowAction="ListSchedules";view.RefreshStatusAsync().GetAwaiter().GetResult();string refreshError=editor.Message;
+  Check(refreshError.Contains("could not")&&!refreshError.Contains("private fixture"),"Thrown timer refresh error was not retained safely.");
+  service.ThrowAction=null;view.RefreshStatusAsync().GetAwaiter().GetResult();Check(editor.Message==refreshError,"Following timer refresh erased its previous exception error.");
   view.Close();app.Shutdown();
   if(args.Length>0){
    string root=Path.Combine(args[0],"schedule-native-"+Guid.NewGuid().ToString("N")),engine=Path.Combine(root,"Bridge"),setup=Path.Combine(root,"Setup");Directory.CreateDirectory(engine);
@@ -49,8 +63,9 @@ $s=Get-Content -LiteralPath $InputFile -Raw -Encoding UTF8|ConvertFrom-Json
  }
  static List<T> Find<T>(DependencyObject p) where T:DependencyObject{var r=new List<T>();foreach(object c in LogicalTreeHelper.GetChildren(p)){DependencyObject d=c as DependencyObject;if(d!=null){if(d is T)r.Add((T)d);r.AddRange(Find<T>(d));}}return r;}
  class Fake:IScheduleService {
-  public ScheduleRequest Last;public string Action;public bool Fail;public List<ScheduleItem> Items=new List<ScheduleItem>();
+  public ScheduleRequest Last;public string Action;public bool Fail;public string ThrowAction;public List<ScheduleItem> Items=new List<ScheduleItem>();
   public Task<SetupResult> InvokeScheduleAsync(string action,ScheduleRequest request,CancellationToken token){Action=action;Last=request;
+   if(action==ThrowAction)throw new IOException("private fixture transport diagnostics");
    if(Fail)return Task.FromResult(SetupResult.ActionRequired("time","Choose a valid daily time."));
    if(action=="SaveSchedule")Items=new List<ScheduleItem>{new ScheduleItem{Project=request.Project,TimeOfDay=request.TimeOfDay,Enabled=request.Enabled,NextDueUtc="2026-11-03T14:15:00Z",TimeZone="Eastern Standard Time"}};
    if(action=="DisableSchedule")Items[0].Enabled=false;

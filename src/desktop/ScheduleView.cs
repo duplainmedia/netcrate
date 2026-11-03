@@ -21,8 +21,10 @@ namespace NetCrate {
   public string Message {get;private set;}
   bool messageIsError;
   public ScheduleEditor(IScheduleService service){this.service=service;Items=new List<ScheduleItem>();Message="";}
+  internal void RecordFailure(){Message="The schedule could not be read or saved. Check the folder and try again.";messageIsError=true;}
   async Task Run(string action,ScheduleRequest request,CancellationToken token,bool preserveMessage=false){
-   SetupResult result=await service.InvokeScheduleAsync(action,request,token);
+   SetupResult result;
+   try{result=await service.InvokeScheduleAsync(action,request,token);}catch(Exception){RecordFailure();return;}
    if(!result.Succeeded){Message=result.Message;messageIsError=true;return;}
    Items=result.Schedules;
    if(!preserveMessage||!messageIsError){Message=Items.Count==0?"No automatic backups yet. Choose a folder and a daily local time.":result.Message;messageIsError=false;}
@@ -60,6 +62,6 @@ namespace NetCrate {
    if(!preserveInput&&list.SelectedItem!=null)SetFields((ScheduleItem)list.SelectedItem);status.Text=editor.Message;
   }
   internal Task RefreshStatusAsync(){return Run(()=>editor.RefreshAsync(CancellationToken.None,true),true);}
-  async Task Run(Func<Task> action,bool preserveInput=false){if(busy)return;busy=true;commands.IsEnabled=false;try{await action();Render(preserveInput);}catch(Exception){status.Text="The schedule could not be read or saved. Check the folder and try again.";}finally{busy=false;commands.IsEnabled=true;}}
+  async Task Run(Func<Task> action,bool preserveInput=false){if(busy)return;busy=true;commands.IsEnabled=false;try{await action();Render(preserveInput);}catch(Exception){editor.RecordFailure();status.Text=editor.Message;}finally{busy=false;commands.IsEnabled=true;}}
  }
 }
