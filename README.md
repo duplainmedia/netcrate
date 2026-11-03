@@ -10,8 +10,6 @@ Once you start a backup for a project folder, NetCrate automates the workflow: b
 
 For someone with spare hardware and a suitable second location, it can be an affordable, self-hosted alternative to paying for cloud backup storage, with the added benefit of offloading proxy encoding.
 
-I built it because it makes my own workflow easier. I’m sharing it because it might help another independent filmmaker or small production team put equipment they already own to work.
-
 ## License
 
 NetCrate's original code is licensed under the [MIT License](LICENSE). Third-party software retains its own licenses.
