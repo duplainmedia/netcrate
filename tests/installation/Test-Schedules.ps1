@@ -119,4 +119,5 @@ try {
  Check ($timer.Elapsed.TotalSeconds -lt 5 -and [IO.Path]::GetFileNameWithoutExtension($same) -eq $cj[0].BaseName) 'Admission lock was held across backup work or duplicated the running original.'
 } finally {[IO.File]::WriteAllText((Join-Path $concurrent 'backup-release'),'continue')}
 Check ($drain.WaitForExit(30000) -and $drain.ExitCode -eq 0) 'Queue drain fixture failed.';$drain.Dispose()
+& "$PSScriptRoot/Test-ScheduleReview.ps1" -TestRoot (Join-Path $TestRoot 'Review')
 Write-Output "PASS: $script:checks schedule assertions."

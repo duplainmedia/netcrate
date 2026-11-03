@@ -1,3 +1,10 @@
+function Get-NetCrateScheduleLocalZone {
+    # The signed-in runtime can outlive a Windows time-zone change. Capture one
+    # fresh zone for this pass; explicit controlled zones never clear the cache.
+    [TimeZoneInfo]::ClearCachedData()
+    return [TimeZoneInfo]::Local
+}
+
 # All queue writers share this short lock. Native backup work runs after release.
 function Invoke-NetCrateAdmissionLock([string]$Root, [scriptblock]$Action) {
     $key = Get-NetCrateHash ([IO.Path]::GetFullPath($Root).TrimEnd('\').ToUpperInvariant())
@@ -18,7 +25,19 @@ function Get-NetCrateScheduleOccurrence([DateTime]$Date, [string]$TimeOfDay, [Ti
     return [DateTimeOffset]::new($local, $offset).ToUniversalTime()
 }
 
+function Get-NetCrateScheduleDue($Record, [DateTimeOffset]$Now, [TimeZoneInfo]$Zone) {
+    $date = [TimeZoneInfo]::ConvertTime($Now, $Zone).Date
+    $due = Get-NetCrateScheduleOccurrence $date $Record.TimeOfDay $Zone
+    if ($due -gt $Now) { $date=$date.AddDays(-1); $due=Get-NetCrateScheduleOccurrence $date $Record.TimeOfDay $Zone }
+    $day=$date.ToString('yyyy-MM-dd')
+    if ($due -gt [DateTimeOffset]$Record.EffectiveUtc -and (-not $Record.LastOccurrence -or $day -cgt $Record.LastOccurrence)) {
+        return [pscustomobject]@{ Due=$due; LocalDate=$day }
+    }
+}
+
 function Get-NetCrateScheduleNext($Record, [DateTimeOffset]$Now, [TimeZoneInfo]$Zone) {
+    $pending = Get-NetCrateScheduleDue $Record $Now $Zone
+    if ($pending) { return $pending.Due.ToString('o') }
     $date = [TimeZoneInfo]::ConvertTime($Now, $Zone).Date
     # Cursor is a high-water local date, including after zone changes or rollback.
     if ($Record.LastOccurrence -and $date.ToString('yyyy-MM-dd') -cle $Record.LastOccurrence) { $date = [DateTime]::ParseExact($Record.LastOccurrence, 'yyyy-MM-dd', $null).AddDays(1) }
@@ -31,7 +50,8 @@ function Get-NetCrateScheduleNext($Record, [DateTimeOffset]$Now, [TimeZoneInfo]$
     throw 'The next backup date could not be calculated.'
 }
 
-function Get-NetCrateSchedules([string]$Root, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone = [TimeZoneInfo]::Local) {
+function Get-NetCrateSchedules([string]$Root, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone) {
+    if (-not $Zone) { $Zone = Get-NetCrateScheduleLocalZone }
     $directory = [IO.Path]::Combine($Root, 'Schedules')
     if (-not [IO.Directory]::Exists($directory)) { return }
     $files = @([IO.Directory]::EnumerateFiles($directory, '*.json'))
@@ -40,13 +60,15 @@ function Get-NetCrateSchedules([string]$Root, [DateTimeOffset]$Now = [DateTimeOf
         $record = Read-NetCrateJson $file -MaximumBytes 8192
         if ($record.Version -ne 1 -or $record.Id -cnotmatch '^[a-f0-9]{64}$') { throw 'A backup schedule is invalid.' }
         $record | Add-Member NextDueUtc $(if ($record.Enabled) { Get-NetCrateScheduleNext $record $Now $Zone } else { '' }) -Force
+        $record | Add-Member CatchUpPending ([bool]($record.Enabled -and [DateTimeOffset]$record.NextDueUtc -le $Now)) -Force
         $record | Add-Member TimeZone $Zone.Id -Force
         $record
     }
 }
 
 function Save-NetCrateSchedule([string]$Root, $Settings, [string]$Project, [string]$TimeOfDay, [bool]$Enabled,
-    [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone = [TimeZoneInfo]::Local) {
+    [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone) {
+    if (-not $Zone) { $Zone = Get-NetCrateScheduleLocalZone }
     $path = Get-NetCrateBackupPath $Settings $Project (Get-NetCrateBackupMode $Settings)
     if (-not [IO.Directory]::Exists($path)) { throw 'The folder is not available.' }
     $null = Get-NetCrateScheduleOccurrence $Now.Date $TimeOfDay $Zone
@@ -72,22 +94,41 @@ function Disable-NetCrateSchedule([string]$Root, $Settings, [string]$Project) {
     }
 }
 
-function Invoke-NetCrateSchedules([string]$Root, $Settings, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone = [TimeZoneInfo]::Local) {
+function Invoke-NetCrateSchedules([string]$Root, $Settings, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow, [TimeZoneInfo]$Zone) {
+    if (-not $Zone) { $Zone = Get-NetCrateScheduleLocalZone }
+    $failures = [Collections.Generic.List[string]]::new()
     foreach ($schedule in @(Get-NetCrateSchedules $Root $Now $Zone)) {
+      try {
         Invoke-NetCrateAdmissionLock $Root {
             $file = [IO.Path]::Combine($Root, 'Schedules', $schedule.Id + '.json')
             $record = Read-NetCrateJson $file # edit/disable may have won the lock
             if (-not $record.Enabled) { return }
-            $date = [TimeZoneInfo]::ConvertTime($Now, $Zone).Date
-            $due = Get-NetCrateScheduleOccurrence $date $record.TimeOfDay $Zone
-            if ($due -gt $Now) { $date=$date.AddDays(-1); $due=Get-NetCrateScheduleOccurrence $date $record.TimeOfDay $Zone }
-            $day=$date.ToString('yyyy-MM-dd')
-            if ($due -le [DateTimeOffset]$record.EffectiveUtc -or ($record.LastOccurrence -and $day -cle $record.LastOccurrence)) { return }
+            $pending = Get-NetCrateScheduleDue $record $Now $Zone
+            if (-not $pending) { return }
+            $day=$pending.LocalDate
             try {
+                $path = Get-NetCrateBackupPath $Settings $record.Project (Get-NetCrateBackupMode $Settings)
+                # Directory.Exists also returns false on access errors. Only an
+                # actual missing/replaced directory is a reconnect-folder hint.
+                $missing = $false; $attributes = 0
+                try { $attributes = [IO.File]::GetAttributes($path) }
+                catch [IO.DirectoryNotFoundException] { $missing = $true }
+                catch [IO.FileNotFoundException] { $missing = $true }
+                if ($missing -or -not ($attributes -band [IO.FileAttributes]::Directory)) {
+                    $record.Status='Folder unavailable'; Write-NetCrateJson $file $record; return
+                }
                 $null=Add-NetCrateBackupQueue $Root $Settings $record.Project -OccurrenceId ($record.Id + '-' + $record.Revision + '-' + $day) -LocalDate $day -Now $Now
                 $record.LastOccurrence=$day; $record.Status='Last scheduled backup queued'
-            } catch { $record.Status='Folder unavailable' }
+            } catch {
+                $record.Status='Scheduling needs attention: check NetCrate state-folder access, free space and queue records.'
+                $failures.Add($record.Id)
+            }
             Write-NetCrateJson $file $record
         }
+      } catch { $failures.Add($schedule.Id) }
+    }
+    if ($failures.Count) {
+        return [pscustomobject]@{ NeedsAttention=$true; Code='schedule-admission'
+            Message='Automatic backups need attention. Check NetCrate state-folder access, free space and queue records. Repair NetCrate or retry after correcting the problem.' }
     }
 }

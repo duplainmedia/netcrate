@@ -15,6 +15,7 @@ namespace NetCrate {
    var runtime=ReadJson(Path.Combine(settings.StateRoot,"runtime-status.json"));
    if(runtime!=null&&(S(runtime,"State")=="NeedsAttention"||!ProcessAlive(runtime))) {
     view.ServiceAttention=true;view.ServiceMessage="Check that both computers are on, signed in to Windows and connected to NetBird. NetCrate will retry automatically.";
+    if(S(runtime,"Code")=="schedule-admission")view.ServiceMessage="Automatic backups need attention. Check NetCrate state-folder access, free space and queue records. Repair NetCrate or retry after correcting the problem.";
    }
    if(settings.Role=="Worker") {
     foreach(string path in Files(Path.Combine(settings.StateRoot,"WorkerJobs"),"*.json")) {

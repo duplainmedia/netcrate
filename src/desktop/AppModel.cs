@@ -53,6 +53,7 @@ namespace NetCrate {
   IDictionary<string,object> Tail(string path,string type){if(!SafeFolders.IsUnder(path,settings.RunsRoot)&&!SafeFolders.IsUnder(path,settings.BackupRecords))return null;try{if(!path.EndsWith(".backup.jsonl",StringComparison.OrdinalIgnoreCase)||!File.Exists(path)||(File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)return null;string text;using(FileStream stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)){stream.Seek(Math.Max(0,stream.Length-131072),SeekOrigin.Begin);using(StreamReader r=new StreamReader(stream,Encoding.UTF8))text=r.ReadToEnd();}IDictionary<string,object> last=null;foreach(string line in text.Split('\n'))try{var d=json.DeserializeObject(line) as IDictionary<string,object>;if(S(d,"message_type")==type)last=d;}catch{}return last;}catch{return null;}}
   static bool ProcessAlive(IDictionary<string,object> run){try{using(Process p=Process.GetProcessById((int)N(run,"ProcessId"))){if(p.HasExited)return false;DateTime start=T(run,"ProcessStartedUtc");return start!=DateTime.MinValue&&Math.Abs((p.StartTime.ToUniversalTime()-start).TotalSeconds)<2;}}catch{return false;}}
   public Dashboard Read(){
+   TimeZoneInfo.ClearCachedData();
    view=new Dashboard();jobs=new Dictionary<string,Job>(StringComparer.OrdinalIgnoreCase);excluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
    foreach(string name in Strings(ReadJson(Path.Combine(settings.BackupRecords,"office-backup-queue-control.json")),"ExcludedProjects"))excluded.Add(name);
    ReadReplacementRequests();

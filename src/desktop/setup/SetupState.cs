@@ -97,7 +97,13 @@ namespace NetCrate.Setup
         public string NextDueUtc { get; set; }
         public string TimeZone { get; set; }
         public string Status { get; set; }
-        public string NextRun { get { DateTimeOffset date; return !Enabled?"Disabled":DateTimeOffset.TryParse(NextDueUtc,out date)?date.ToLocalTime().ToString("yyyy-MM-dd HH:mm zzz")+" ("+TimeZone+")":"Next run unavailable"; } }
+        public bool CatchUpPending { get; set; }
+        public string NextRun { get {
+            if(!Enabled)return "Disabled";
+            DateTimeOffset date;if(!DateTimeOffset.TryParse(NextDueUtc,out date)||String.IsNullOrEmpty(TimeZone))return "Next run unavailable";
+            try{return (CatchUpPending?"Catch-up pending: ":"")+TimeZoneInfo.ConvertTime(date,TimeZoneInfo.FindSystemTimeZoneById(TimeZone)).ToString("yyyy-MM-dd HH:mm zzz")+" ("+TimeZone+")";}
+            catch(TimeZoneNotFoundException){return "Next run unavailable";}catch(InvalidTimeZoneException){return "Next run unavailable";}
+        } }
         public override string ToString(){return Project+" · "+TimeOfDay+" · "+NextRun+(String.IsNullOrEmpty(Status)?"":" · "+Status);}
     }
     public sealed class ScheduleRequest {

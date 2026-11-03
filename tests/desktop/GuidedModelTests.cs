@@ -67,6 +67,11 @@ class GuidedModelTests {
   Put(Path.Combine(state,"Queue","media-failure.json"),new{Project=mediaFailure,BackupMode="Media",BackupCompletedUtc="2026-11-02T20:00:00Z",MediaState="Pending",State="WaitingForProxies",Sample=false,SnapshotId=new string('9',64),RequestId="",Id="media-failure",CreatedUtc="2026-11-02T19:00:00Z",UpdatedUtc="2026-11-02T20:00:00Z"});
   mediaJob=new JobReader(settings).Read().Jobs.Single(j=>j.ProjectPath==mediaFailure);
   Assert(mediaJob.BackupCompleted&&mediaJob.BackupStatus.Contains("Media: Pending")&&mediaJob.BackupCompletedUtc==new DateTime(2026,11,2,20,0,0,DateTimeKind.Utc),"Pending media hid original completion.");
+  TimeZoneInfo cachedZone=TimeZoneInfo.Local;new JobReader(settings).Read();
+  Assert(!Object.ReferenceEquals(cachedZone,TimeZoneInfo.Local),"Long-lived dashboard retained its cached local time zone.");
+  Put(Path.Combine(state,"runtime-status.json"),new{State="NeedsAttention",Code="schedule-admission",Message="private fixture diagnostics"});
+  Dashboard schedulerError=new JobReader(settings).Read();
+  Assert(schedulerError.ServiceAttention&&schedulerError.ServiceMessage.Contains("state-folder access")&&!schedulerError.ServiceMessage.Contains("private fixture"),"Scheduler storage error was hidden behind a connection hint or exposed raw diagnostics.");
   Console.WriteLine("PASS: "+assertions+" guided backup monitor assertions.");
  }
  static string Hash(string path){using(SHA256 hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path))).Replace("-","").ToLowerInvariant();}

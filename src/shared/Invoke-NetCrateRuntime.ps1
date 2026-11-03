@@ -14,6 +14,7 @@ try {
     try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
     if (-not $owned) { exit 0 }
     do {
+        $scheduleStatus = $null
         try {
             Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'Running'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o') }
             $settings = Import-NetCrateSettings ([IO.Path]::Combine($Root, 'settings.json')) $owner.Role
@@ -26,14 +27,16 @@ try {
                 }
                 if ($settings.BackupMode -ceq 'Media' -and -not ($settings.PSObject.Properties.Name -contains 'SourceBackupMode' -and $settings.SourceBackupMode -ceq 'Folder')) { Invoke-NetCrateWorker $Root $settings }
             } else {
-                Invoke-NetCrateSchedules $Root $settings
+                $scheduleStatus = Invoke-NetCrateSchedules $Root $settings
                 Invoke-NetCrateQueue $Root $settings
                 if ($settings.BackupMode -ceq 'Media') { Invoke-NetCrateReceiver $Root $settings }
                 Update-NetCrateQueue $Root $settings
             }
-            Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'Running'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o') }
+            Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = $(if ($scheduleStatus) { 'NeedsAttention' } else { 'Running' }); ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o')
+                Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { '' }) }
         } catch {
-            Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'NeedsAttention'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o'); Message = $_.Exception.Message }
+            Write-NetCrateJson ([IO.Path]::Combine($Root, 'runtime-status.json')) @{ State = 'NeedsAttention'; ProcessId = $PID; ProcessStartedUtc = $startedUtc; UpdatedUtc = [DateTime]::UtcNow.ToString('o')
+                Code=$(if ($scheduleStatus) { $scheduleStatus.Code } else { '' }); Message=$(if ($scheduleStatus) { $scheduleStatus.Message } else { $_.Exception.Message }) }
         }
         if (-not $Once) { Start-Sleep -Seconds 5 }
     } while (-not $Once)
